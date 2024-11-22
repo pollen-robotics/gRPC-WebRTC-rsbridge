@@ -22,7 +22,7 @@ pub struct WebRTCBridge {
 }
 
 impl WebRTCBridge {
-    pub fn new(uri: String, name: String) -> Self {
+    pub fn new(uri: String, name: String, grpc_address: String) -> Self {
         debug!("Constructor GstWebRTCServer");
 
         gstrswebrtc::plugin_register_static().unwrap();
@@ -30,12 +30,6 @@ impl WebRTCBridge {
         let main_loop = Arc::new(glib::MainLoop::new(None, false));
 
         let sessions = Arc::new(Mutex::new(HashMap::<String, Session>::new()));
-
-        //let sessions_clone_1 = sessions.clone();
-        let sessions_clone = sessions.clone();
-        let sessions_clone2 = sessions.clone();
-        let sessions_clone3 = sessions.clone();
-        let sessions_clone4 = sessions.clone();
 
         let (tx, rx) = channel::<bool>();
         let signaller = Signaller::new(WebRTCSignallerRole::Producer);
@@ -55,11 +49,15 @@ impl WebRTCBridge {
             //"end-session",
             "session-ended",
             false,
-            glib::closure!(|_signaler: glib::Object, session_id: &str| {
-                info!("session-ended {}", session_id);
-                sessions_clone3.lock().unwrap().remove(session_id);
-                false
-            }),
+            glib::closure!(
+                #[strong]
+                sessions,
+                move |_signaler: glib::Object, session_id: &str| {
+                    info!("session-ended {}", session_id);
+                    sessions.lock().unwrap().remove(session_id);
+                    false
+                }
+            ),
         );
 
         signaller.connect_closure(
@@ -84,10 +82,12 @@ impl WebRTCBridge {
             "session-requested",
             false,
             glib::closure!(
-                |_signaler: glib::Object,
-                 session_id: &str,
-                 peer_id: &str,
-                 offer: Option<&gstwebrtc::WebRTCSessionDescription>| {
+                #[strong]
+                sessions,
+                move |_signaler: glib::Object,
+                      session_id: &str,
+                      peer_id: &str,
+                      offer: Option<&gstwebrtc::WebRTCSessionDescription>| {
                     info!("Session requested id: {} peer_id: {} ", session_id, peer_id);
 
                     if let Some(_offer) = offer {
@@ -100,6 +100,7 @@ impl WebRTCBridge {
                             peer_id.to_string(),
                             Arc::new(Mutex::new(_signaler.downcast::<Signallable>().unwrap())),
                             session_id.to_string(),
+                            grpc_address.clone(),
                         ),
                     );
                 }
@@ -110,11 +111,13 @@ impl WebRTCBridge {
             "session-description",
             false,
             glib::closure!(
-                |_signaler: glib::Object,
-                 session_id: &str,
-                 session_description: &gstwebrtc::WebRTCSessionDescription| {
+                #[strong]
+                sessions,
+                move |_signaler: glib::Object,
+                      session_id: &str,
+                      session_description: &gstwebrtc::WebRTCSessionDescription| {
                     if session_description.type_() == gstwebrtc::WebRTCSDPType::Answer {
-                        sessions_clone
+                        sessions
                             .lock()
                             .unwrap()
                             .get(session_id)
@@ -140,23 +143,27 @@ impl WebRTCBridge {
         signaller.connect_closure(
             "handle-ice",
             false,
-            glib::closure!(|_signaler: glib::Object,
-                            session_id: &str,
-                            sdp_m_line_index: u32,
-                            sdp_mid: Option<String>,
-                            candidate: &str| {
-                sessions_clone2
-                    .lock()
-                    .unwrap()
-                    .get(session_id)
-                    .unwrap()
-                    .handle_ice(Some(sdp_m_line_index), sdp_mid, candidate);
-            }),
+            glib::closure!(
+                #[strong]
+                sessions,
+                move |_signaler: glib::Object,
+                      session_id: &str,
+                      sdp_m_line_index: u32,
+                      sdp_mid: Option<String>,
+                      candidate: &str| {
+                    sessions
+                        .lock()
+                        .unwrap()
+                        .get(session_id)
+                        .unwrap()
+                        .handle_ice(Some(sdp_m_line_index), sdp_mid, candidate);
+                }
+            ),
         );
 
         Self {
             //pipeline: pipeline,
-            sessions: sessions_clone4,
+            sessions: sessions,
             signaller: signaller,
             rx: rx,
             main_loop: main_loop,

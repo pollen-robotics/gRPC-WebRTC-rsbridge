@@ -1,40 +1,55 @@
-use log::{debug, error, info, warn};
+use log::debug;
 
 use crate::grpc::reachy_api::reachy::reachy_service_client::ReachyServiceClient;
 use crate::grpc::reachy_api::reachy::Reachy;
-use tonic::{transport::Channel, Response};
+use tokio::runtime::Runtime;
+use tonic::transport::Channel;
 
 pub struct GrpcClient {
     client: ReachyServiceClient<Channel>,
+    rt: Runtime, // see https://tokio.rs/tokio/topics/bridging
 }
 
 impl GrpcClient {
-    pub async fn new(host: String, port: u16) -> Result<Self, Box<dyn std::error::Error>> {
-        debug!("Constructor Grpc client {host}:{port}");
-        let client = ReachyServiceClient::connect(format!("http://{host}:{port}")).await?;
+    pub fn new(address: String) -> Self {
+        debug!("Constructor Grpc client {address}");
 
-        Ok(Self { client: client })
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let client = rt
+            .block_on(ReachyServiceClient::connect(address))
+            .expect("Connection failed");
+
+        Self {
+            client: client,
+            rt: rt,
+        }
     }
 
-    pub async fn get_reachy(&mut self) -> Result<Response<Reachy>, Box<dyn std::error::Error>> {
+    pub fn get_reachy(&mut self) -> Reachy {
         debug!("Get reachy");
         let request = tonic::Request::new(());
-        let response = self.client.get_reachy(request).await?;
-        info!("Response: {:?}", response);
-        Ok(response)
+
+        self.rt
+            .block_on(self.client.get_reachy(request))
+            .unwrap()
+            .into_inner()
     }
 }
 
-#[tokio::test]
-async fn test_get_reachy() {
+#[test]
+fn test_get_reachy() {
     env_logger::init();
 
-    let mut grpc_client = GrpcClient::new("localhost".to_string(), 50051)
-        .await
-        .unwrap();
+    let grpc_address = format!("http://localhost:50051");
 
-    let reachy: Response<Reachy> = grpc_client.get_reachy().await.unwrap();
-    let reachy_id = reachy.into_inner().id.unwrap();
+    let mut grpc_client = GrpcClient::new(grpc_address);
+
+    let reachy: Reachy = grpc_client.get_reachy();
+    let reachy_id = reachy.id.unwrap();
 
     assert!(
         !reachy_id.name.is_empty(),

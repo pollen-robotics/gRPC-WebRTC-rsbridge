@@ -1,28 +1,38 @@
+use crate::grpc::grpc_client::GrpcClient;
+use crate::grpc::reachy_api::bridge::service_request::Request;
+use crate::grpc::reachy_api::bridge::ServiceRequest;
+
 use gst::glib;
+
 use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
 use gstrswebrtc::signaller::SignallableExt;
 use gstwebrtc::WebRTCDataChannel;
 use log::{debug, error, info, warn};
-use std::sync::{Arc, Mutex};
-
 use prost::Message;
 
-use crate::grpc::reachy_api::bridge::service_request::Request;
-use crate::grpc::reachy_api::bridge::ServiceRequest;
+use std::sync::mpsc::channel;
 
-use crate::grpc::grpc_client::GrpcClient;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 pub struct Session {
     peer_id: String,
     pipeline: gst::Pipeline,
     webrtcbin: Arc<Mutex<gst::Element>>,
-    //grpc_client: Arc<Mutex<GrpcClient>>,
+    tx_stop_thread: std::sync::mpsc::Sender<bool>,
 }
 
 impl Session {
-    pub fn new(peer_id: String, signaller: Arc<Mutex<Signallable>>, session_id: String) -> Self {
+    pub fn new(
+        peer_id: String,
+        signaller: Arc<Mutex<Signallable>>,
+        session_id: String,
+        grpc_address: String,
+    ) -> Self {
         debug!("Constructor Session with peer {}", peer_id);
+
+        let (grpc_client, tx_stop_thread) = Session::spawn_grpc_client(grpc_address);
 
         let pipeline = gst::Pipeline::builder()
             .name(format!("session-pipeline-{peer_id}"))
@@ -38,7 +48,7 @@ impl Session {
         match ret {
             Ok(gst::StateChangeSuccess::Success) | Ok(gst::StateChangeSuccess::Async) => {
                 // Pipeline state changed successfully
-                Session::create_data_channels(webrtcbin_arc.clone());
+                Session::create_data_channels(webrtcbin_arc.clone(), grpc_client);
                 Session::create_offer(webrtcbin_arc.clone(), signaller, session_id);
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
@@ -53,7 +63,24 @@ impl Session {
             peer_id: peer_id,
             pipeline: pipeline,
             webrtcbin: webrtcbin_arc,
+            tx_stop_thread: tx_stop_thread,
         }
+    }
+
+    fn spawn_grpc_client(
+        grpc_address: String,
+    ) -> (Arc<Mutex<GrpcClient>>, std::sync::mpsc::Sender<bool>) {
+        let (tx, rx) = channel();
+        let (tx_stop_thread, rx_stop_thread) = channel::<bool>();
+        //grpc client uses the tonic async lib that can't run in the glib:closure where this Session is created
+        thread::spawn(move || {
+            let grpc_client = Arc::new(Mutex::new(GrpcClient::new(grpc_address)));
+            tx.send(grpc_client.clone()).unwrap();
+            rx_stop_thread.recv().unwrap();
+            debug!("exit grpc thread");
+        });
+        let grpc_client = rx.recv().unwrap();
+        (grpc_client, tx_stop_thread)
     }
 
     fn stop(&self) {
@@ -69,9 +96,13 @@ impl Session {
                 error!("Failed to transition pipeline to NULL: {:?}", err);
             }
         }
+        let _ = self.tx_stop_thread.send(true);
     }
 
-    fn create_data_channels(webrtcbin: Arc<Mutex<gst::Element>>) {
+    fn create_data_channels(
+        webrtcbin: Arc<Mutex<gst::Element>>,
+        grpc_client: Arc<Mutex<GrpcClient>>,
+    ) {
         let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
             "create-data-channel",
             &[
@@ -97,11 +128,11 @@ impl Session {
                 match request.request {
                     Some(Request::GetReachy(_)) => {
                         info!("Received GetReachy request");
-                        /*let resp = self.handle_get_reachy_request(grpc_client);
-                        debug!("Sending service response message: {:?}", resp);
-                        let byte_data = resp.encode_to_vec();
-                        let gbyte_data = glib::Bytes::from(&byte_data);
-                        data_channel.send_data(gbyte_data);*/
+                        let reachy = grpc_client.lock().unwrap().get_reachy();
+                        //let name = reachy.id.unwrap().name;
+                        //info!("reachy {name}");
+                        let data = glib::Bytes::from(&reachy.encode_to_vec());
+                        _channel.send_data(Some(&data));
                     }
                     Some(Request::Connect(connect_request)) => {
                         info!("Received Connect request");
