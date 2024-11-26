@@ -1,6 +1,9 @@
 use crate::grpc::grpc_client::GrpcClient;
 use crate::grpc::reachy_api::bridge::service_request::Request;
-use crate::grpc::reachy_api::bridge::ServiceRequest;
+use crate::grpc::reachy_api::bridge::Connect;
+use crate::grpc::reachy_api::bridge::{service_response, ConnectionStatus, ServiceResponse};
+use crate::grpc::reachy_api::bridge::{AnyCommands, ServiceRequest};
+use crate::grpc::reachy_api::reachy::{ReachyId, ReachyState, ReachyStatus};
 
 use gst::glib;
 
@@ -34,6 +37,40 @@ impl Session {
 
         let (grpc_client, tx_stop_thread) = Session::spawn_grpc_client(grpc_address);
 
+        let (pipeline, webrtcbin) =
+            Session::setup_webrtc(&peer_id, signaller, session_id, grpc_client);
+
+        Self {
+            peer_id: peer_id,
+            pipeline: pipeline,
+            webrtcbin: webrtcbin,
+            tx_stop_thread: tx_stop_thread,
+        }
+    }
+
+    fn spawn_grpc_client(
+        grpc_address: String,
+    ) -> (Arc<Mutex<GrpcClient>>, std::sync::mpsc::Sender<bool>) {
+        let (tx, rx) = channel();
+        let (tx_stop_thread, rx_stop_thread) = channel::<bool>();
+        //grpc client uses the tonic async lib that can't run in the glib:closure where this Session is created
+        thread::spawn(move || {
+            let grpc_client = Arc::new(Mutex::new(GrpcClient::new(grpc_address)));
+            tx.send(grpc_client.clone()).unwrap();
+            rx_stop_thread.recv().unwrap();
+            grpc_client.lock().unwrap().stop();
+            debug!("exit grpc thread");
+        });
+        let grpc_client = rx.recv().unwrap();
+        (grpc_client, tx_stop_thread)
+    }
+
+    fn setup_webrtc(
+        peer_id: &String,
+        signaller: Arc<Mutex<Signallable>>,
+        session_id: String,
+        grpc_client: Arc<Mutex<GrpcClient>>,
+    ) -> (gst::Pipeline, Arc<Mutex<gst::Element>>) {
         let pipeline = gst::Pipeline::builder()
             .name(format!("session-pipeline-{peer_id}"))
             .build();
@@ -58,29 +95,7 @@ impl Session {
                 error!("Failed to transition pipeline to PLAYING: {:?}", err);
             }
         }
-
-        Self {
-            peer_id: peer_id,
-            pipeline: pipeline,
-            webrtcbin: webrtcbin_arc,
-            tx_stop_thread: tx_stop_thread,
-        }
-    }
-
-    fn spawn_grpc_client(
-        grpc_address: String,
-    ) -> (Arc<Mutex<GrpcClient>>, std::sync::mpsc::Sender<bool>) {
-        let (tx, rx) = channel();
-        let (tx_stop_thread, rx_stop_thread) = channel::<bool>();
-        //grpc client uses the tonic async lib that can't run in the glib:closure where this Session is created
-        thread::spawn(move || {
-            let grpc_client = Arc::new(Mutex::new(GrpcClient::new(grpc_address)));
-            tx.send(grpc_client.clone()).unwrap();
-            rx_stop_thread.recv().unwrap();
-            debug!("exit grpc thread");
-        });
-        let grpc_client = rx.recv().unwrap();
-        (grpc_client, tx_stop_thread)
+        (pipeline, webrtcbin_arc)
     }
 
     fn stop(&self) {
@@ -113,10 +128,14 @@ impl Session {
             ],
         );
 
+        // there is a deadlock that prevent from creating data channel from the glib closure
+        let (tx, rx) = std::sync::mpsc::channel();
+        Session::handle_connect_request(rx, webrtcbin, grpc_client.clone());
+
         channel.connect_closure(
             "on-message-data",
             false,
-            glib::closure!(|_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
+            glib::closure!(move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
                 let request: ServiceRequest = match Message::decode(msg.as_ref()) {
                     Ok(request) => request,
                     Err(e) => {
@@ -129,15 +148,30 @@ impl Session {
                     Some(Request::GetReachy(_)) => {
                         info!("Received GetReachy request");
                         let reachy = grpc_client.lock().unwrap().get_reachy();
-                        //let name = reachy.id.unwrap().name;
-                        //info!("reachy {name}");
-                        let data = glib::Bytes::from(&reachy.encode_to_vec());
+                        let id = reachy.id.clone().unwrap().id;
+
+                        let service_response = ServiceResponse {
+                            response: Some(service_response::Response::ConnectionStatus(
+                                ConnectionStatus {
+                                    connected: true,
+                                    state_channel: format!("reachy_state_{}", id,),
+                                    command_channel: format!("reachy_command_{}", id),
+                                    reachy: Some(reachy),
+                                },
+                            )),
+                        };
+
+                        let data = glib::Bytes::from_owned(service_response.encode_to_vec());
                         _channel.send_data(Some(&data));
                     }
                     Some(Request::Connect(connect_request)) => {
-                        info!("Received Connect request");
-                        //let resp = self.handle_connect_request(connect_request, grpc_client, pc).await;
-                        // Handle the response if needed
+                        /*Session::handle_connect_request(
+                            connect_request,
+                            grpc_client.clone(),
+                            webrtcbin.clone(),
+                        );*/
+                        //let _ = tx.send(connect_request.reachy_id.unwrap().id);
+                        let _ = tx.send(connect_request);
                     }
                     Some(Request::Disconnect(_)) => {
                         info!("Received Disconnect request");
@@ -150,6 +184,173 @@ impl Session {
                 }
             }),
         );
+    }
+
+    fn handle_connect_request(
+        rx: std::sync::mpsc::Receiver<Connect>,
+        webrtcbin: Arc<Mutex<gst::Element>>,
+        grpc_client: Arc<Mutex<GrpcClient>>,
+    ) {
+        thread::spawn(move || {
+            let connect = rx.recv().unwrap();
+            let reachyid = connect.reachy_id;
+            let id = reachyid.clone().unwrap().id;
+
+            let (tx_state, rx_state) = std::sync::mpsc::channel();
+            let (tx_audit, rx_audit) = std::sync::mpsc::channel();
+
+            webrtcbin.lock().unwrap().connect_closure(
+                "prepare-data-channel",
+                false,
+                glib::closure!(move |_webrtcbin: &gst::Element,
+                                     channel: &WebRTCDataChannel,
+                                     _islocal: bool| {
+                    let name: String = channel.property("label");
+                    debug!("prepare data channel {}", name);
+
+                    channel.connect_on_error(|channel: &WebRTCDataChannel, error| {
+                        error!(
+                            "Data channel {} error {}",
+                            channel.property::<String>("label"),
+                            error
+                        );
+                    });
+
+                    let tx_state_clone = tx_state.clone();
+                    let tx_audit_clone = tx_audit.clone();
+                    if name == format!("reachy_state_{}", id) {
+                        channel.connect_on_open(move |_| {
+                            info!("Data channel state opened");
+                            let _ = tx_state_clone.send(true);
+                        });
+                    } else if name == format!("reachy_audit_{}", id) {
+                        channel.connect_on_open(move |_| {
+                            info!("Data channel audit opened");
+                            let _ = tx_audit_clone.send(true);
+                        });
+                    }
+                }),
+            );
+
+            Session::configure_state_channel(
+                id,
+                webrtcbin.clone(),
+                grpc_client.clone(),
+                reachyid.clone(),
+                connect.update_frequency,
+                rx_state,
+            );
+
+            Session::configure_audit_channel(
+                id,
+                webrtcbin.clone(),
+                grpc_client,
+                reachyid,
+                connect.update_frequency,
+                rx_audit,
+            );
+
+            let channel_command = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
+                "create-data-channel",
+                &[
+                    &format!("reachy_command_{}", id),
+                    &gst::Structure::builder("config")
+                        .field("ordered", true)
+                        .build(),
+                ],
+            );
+
+            channel_command.connect_closure(
+                "on-message-data",
+                false,
+                glib::closure!(move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
+                    let commands: AnyCommands = match Message::decode(msg.as_ref()) {
+                        Ok(commands) => commands,
+                        Err(e) => {
+                            error!("Failed to decode message: {}", e);
+                            return;
+                        }
+                    };
+
+                    //debug!("received commands {:?}", commands);
+                    //to do commands parsing
+                }),
+            );
+
+            debug!("exit create channels");
+        });
+    }
+
+    fn configure_audit_channel(
+        id: u32,
+        webrtcbin: Arc<Mutex<gst::Element>>,
+        grpc_client: Arc<Mutex<GrpcClient>>,
+        reachy: Option<ReachyId>,
+        update_frequency: f32,
+        rx_audit: std::sync::mpsc::Receiver<bool>,
+    ) {
+        let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
+            "create-data-channel",
+            &[
+                &format!("reachy_audit_{}", id),
+                &gst::Structure::builder("config")
+                    .field("ordered", true)
+                    .build(),
+            ],
+        );
+
+        thread::spawn(move || {
+            let _ = rx_audit.recv();
+            let (tx, rx) = std::sync::mpsc::channel::<ReachyStatus>();
+
+            grpc_client
+                .lock()
+                .unwrap()
+                .get_reachy_audit_status(reachy, update_frequency, tx);
+
+            while let Ok(status) = rx.recv() {
+                //info!("{:?} {}", status, channel.property::<String>("label"));
+                let data = glib::Bytes::from_owned(status.encode_to_vec());
+                channel.send_data(Some(&data));
+            }
+            debug!("exit stream status channel");
+        });
+    }
+
+    fn configure_state_channel(
+        id: u32,
+        webrtcbin: Arc<Mutex<gst::Element>>,
+        grpc_client: Arc<Mutex<GrpcClient>>,
+        reachy: Option<ReachyId>,
+        update_frequency: f32,
+        rx_state: std::sync::mpsc::Receiver<bool>,
+    ) {
+        let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
+            "create-data-channel",
+            &[
+                &format!("reachy_state_{}", id),
+                &gst::Structure::builder("config")
+                    .field("ordered", true)
+                    .build(),
+            ],
+        );
+
+        thread::spawn(move || {
+            let _ = rx_state.recv();
+            let (tx, rx) = std::sync::mpsc::channel::<ReachyState>();
+
+            grpc_client
+                .lock()
+                .unwrap()
+                .get_reachy_state(reachy, update_frequency, tx);
+
+            while let Ok(state) = rx.recv() {
+                //info!("{:?} {}", state, channel.property::<String>("label"));
+                let data = glib::Bytes::from_owned(state.encode_to_vec());
+                channel.send_data(Some(&data));
+            }
+            debug!("exit stream state channel");
+        });
     }
 
     fn create_webrtcbin(signaller: Arc<Mutex<Signallable>>, session_id: &String) -> gst::Element {
@@ -178,10 +379,6 @@ impl Session {
         webrtcbin.connect_notify(
             Some("connection-state"),
             glib::clone!(
-                //#[weak]
-                //element,
-                //#[strong]
-                //peer_id,
                 #[strong]
                 session_id,
                 move |webrtcbin, _pspec| {
@@ -190,26 +387,9 @@ impl Session {
 
                     match state {
                         gstwebrtc::WebRTCPeerConnectionState::Failed => {
-                            /*let this = element.imp();
-                            gst::warning!(
-                                CAT,
-                                obj = element,
-                                "Connection state for in session {} (peer {}) failed",
-                                session_id,
-                                peer_id
-                            );
-                            let _ = this.remove_session(&session_id, true);*/
                             warn!("Connection state for in session {} failed", session_id);
                         }
                         _ => {
-                            /*gst::log!(
-                                CAT,
-                                obj = element,
-                                "Connection state in session {} (peer {}) changed: {:?}",
-                                session_id,
-                                peer_id,
-                                state
-                            );*/
                             info!(
                                 "Connection state in session {}  changed: {:?}",
                                 session_id, state
