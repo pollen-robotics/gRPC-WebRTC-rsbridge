@@ -128,7 +128,7 @@ impl Session {
             ],
         );
 
-        // there is a deadlock that prevent from creating data channel from the glib closure
+        // there is a deadlock that prevents from creating data channel from the glib closure
         let (tx, rx) = std::sync::mpsc::channel();
         Session::handle_connect_request(rx, webrtcbin, grpc_client.clone());
 
@@ -165,16 +165,10 @@ impl Session {
                         _channel.send_data(Some(&data));
                     }
                     Some(Request::Connect(connect_request)) => {
-                        /*Session::handle_connect_request(
-                            connect_request,
-                            grpc_client.clone(),
-                            webrtcbin.clone(),
-                        );*/
-                        //let _ = tx.send(connect_request.reachy_id.unwrap().id);
                         let _ = tx.send(connect_request);
                     }
                     Some(Request::Disconnect(_)) => {
-                        info!("Received Disconnect request");
+                        warn!("Received Disconnect request. no handled!");
                         //let resp = self.handle_disconnect_request().await;
                         // Handle the response if needed
                     }
@@ -246,7 +240,7 @@ impl Session {
                 webrtcbin.clone(),
                 grpc_client,
                 reachyid,
-                connect.update_frequency,
+                connect.audit_frequency,
                 rx_audit,
             );
 
@@ -289,12 +283,18 @@ impl Session {
         update_frequency: f32,
         rx_audit: std::sync::mpsc::Receiver<bool>,
     ) {
+        let max_packet_lifetime = if update_frequency > 1000f32 {
+            1
+        } else {
+            (1000f32 / update_frequency) as u32
+        };
         let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
             "create-data-channel",
             &[
                 &format!("reachy_audit_{}", id),
                 &gst::Structure::builder("config")
                     .field("ordered", true)
+                    .field("max-packet-lifetime", max_packet_lifetime)
                     .build(),
             ],
         );
@@ -325,12 +325,18 @@ impl Session {
         update_frequency: f32,
         rx_state: std::sync::mpsc::Receiver<bool>,
     ) {
+        let max_packet_lifetime = if update_frequency > 1000f32 {
+            1
+        } else {
+            (1000f32 / update_frequency) as u32
+        };
         let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
             "create-data-channel",
             &[
                 &format!("reachy_state_{}", id),
                 &gst::Structure::builder("config")
                     .field("ordered", true)
+                    .field("max-packet-lifetime", max_packet_lifetime)
                     .build(),
             ],
         );
