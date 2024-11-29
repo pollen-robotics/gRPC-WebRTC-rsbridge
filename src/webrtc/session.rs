@@ -1,8 +1,8 @@
 use crate::grpc::grpc_client::GrpcClient;
 use crate::grpc::reachy_api::bridge::service_request::Request;
 use crate::grpc::reachy_api::bridge::Connect;
+use crate::grpc::reachy_api::bridge::{any_command, AnyCommands, ServiceRequest};
 use crate::grpc::reachy_api::bridge::{service_response, ConnectionStatus, ServiceResponse};
-use crate::grpc::reachy_api::bridge::{AnyCommands, ServiceRequest};
 use crate::grpc::reachy_api::reachy::{ReachyId, ReachyState, ReachyStatus};
 
 use gst::glib;
@@ -192,7 +192,10 @@ impl Session {
 
             let (tx_state, rx_state) = std::sync::mpsc::channel();
             let (tx_audit, rx_audit) = std::sync::mpsc::channel();
+            let (tx_reliable_command, rx_reliable_command) = std::sync::mpsc::channel();
+            let (tx_lossy_command, rx_lossy_command) = std::sync::mpsc::channel();
 
+            //configure channels before any data is sent
             webrtcbin.lock().unwrap().connect_closure(
                 "prepare-data-channel",
                 false,
@@ -212,6 +215,8 @@ impl Session {
 
                     let tx_state_clone = tx_state.clone();
                     let tx_audit_clone = tx_audit.clone();
+                    let tx_reliable_command_clone = tx_reliable_command.clone();
+                    let tx_lossy_command_clone = tx_lossy_command.clone();
                     if name == format!("reachy_state_{}", id) {
                         channel.connect_on_open(move |_| {
                             info!("Data channel state opened");
@@ -221,6 +226,61 @@ impl Session {
                         channel.connect_on_open(move |_| {
                             info!("Data channel audit opened");
                             let _ = tx_audit_clone.send(true);
+                        });
+                    } else if name == format!("reachy_command_reliable_{}", id) {
+                        channel.connect_on_open(move |channel_command: &WebRTCDataChannel| {
+                            info!("Data channel command reliable opened");
+                            channel_command.connect_closure(
+                                "on-message-data",
+                                false,
+                                glib::closure!(
+                                    #[strong]
+                                    tx_reliable_command_clone,
+                                    move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
+                                        let commands: AnyCommands =
+                                            match Message::decode(msg.as_ref()) {
+                                                Ok(commands) => commands,
+                                                Err(e) => {
+                                                    error!("Failed to decode message: {}", e);
+                                                    return;
+                                                }
+                                            };
+
+                                        //debug!("received reliable commands {:?}", commands);
+                                        let _ = tx_reliable_command_clone.send(commands);
+                                        //let important_commmands =
+                                        //    Session::create_important_commands(commands);
+                                    }
+                                ),
+                            );
+                        });
+                    } else if name == format!("reachy_command_lossy_{}", id) {
+                        channel.connect_on_open(move |channel_command: &WebRTCDataChannel| {
+                            info!("Data channel command lossy opened");
+                            //let _ = tx_command_clone.send(true);
+                            channel_command.connect_closure(
+                                "on-message-data",
+                                false,
+                                glib::closure!(
+                                    #[strong]
+                                    tx_lossy_command_clone,
+                                    move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
+                                        let commands: AnyCommands =
+                                            match Message::decode(msg.as_ref()) {
+                                                Ok(commands) => commands,
+                                                Err(e) => {
+                                                    error!("Failed to decode message: {}", e);
+                                                    return;
+                                                }
+                                            };
+
+                                        //debug!("received lossy commands {:?}", commands);
+                                        let _ = tx_lossy_command_clone.send(commands);
+                                        //let important_commmands =
+                                        //    Session::create_important_commands(commands);
+                                    }
+                                ),
+                            );
                         });
                     }
                 }),
@@ -238,40 +298,90 @@ impl Session {
             Session::configure_audit_channel(
                 id,
                 webrtcbin.clone(),
-                grpc_client,
+                grpc_client.clone(),
                 reachyid,
                 connect.audit_frequency,
                 rx_audit,
             );
 
-            let channel_command = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
-                "create-data-channel",
-                &[
-                    &format!("reachy_command_{}", id),
-                    &gst::Structure::builder("config")
-                        .field("ordered", true)
-                        .build(),
-                ],
+            Session::configure_command_channel_reliable(
+                id,
+                webrtcbin.clone(),
+                grpc_client.clone(),
+                rx_reliable_command,
             );
 
-            channel_command.connect_closure(
-                "on-message-data",
-                false,
-                glib::closure!(move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
-                    let commands: AnyCommands = match Message::decode(msg.as_ref()) {
-                        Ok(commands) => commands,
-                        Err(e) => {
-                            error!("Failed to decode message: {}", e);
-                            return;
-                        }
-                    };
-
-                    //debug!("received commands {:?}", commands);
-                    //to do commands parsing
-                }),
-            );
+            Session::configure_command_channel_lossy(id, webrtcbin, grpc_client, rx_lossy_command);
 
             debug!("exit create channels");
+        });
+    }
+
+    fn configure_command_channel_reliable(
+        id: u32,
+        webrtcbin: Arc<Mutex<gst::Element>>,
+        grpc_client: Arc<Mutex<GrpcClient>>,
+        rx_command: std::sync::mpsc::Receiver<AnyCommands>,
+    ) {
+        let _channel_command = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
+            "create-data-channel",
+            &[
+                &format!("reachy_command_reliable_{}", id),
+                &gst::Structure::builder("config")
+                    .field("ordered", true)
+                    .build(),
+            ],
+        );
+
+        thread::spawn(move || {
+            while let Ok(commands) = rx_command.recv() {
+                debug!("received reliable commands {:?}", commands);
+                grpc_client.lock().unwrap().handle_commands(commands);
+            }
+            debug!("exit stream reliable command channel");
+        });
+
+        /*channel_command.connect_closure(
+            "on-message-data",
+            false,
+            glib::closure!(move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
+                let commands: AnyCommands = match Message::decode(msg.as_ref()) {
+                    Ok(commands) => commands,
+                    Err(e) => {
+                        error!("Failed to decode message: {}", e);
+                        return;
+                    }
+                };
+
+                //debug!("received commands {:?}", commands);
+                let important_commmands = Session::create_important_commands(commands);
+            }),
+        );*/
+    }
+
+    fn configure_command_channel_lossy(
+        id: u32,
+        webrtcbin: Arc<Mutex<gst::Element>>,
+        grpc_client: Arc<Mutex<GrpcClient>>,
+        rx_command: std::sync::mpsc::Receiver<AnyCommands>,
+    ) {
+        let _channel_command = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
+            "create-data-channel",
+            &[
+                &format!("reachy_command_lossy_{}", id),
+                &gst::Structure::builder("config")
+                    .field("ordered", true)
+                    .field("max-retransmits", 0)
+                    .build(),
+            ],
+        );
+
+        thread::spawn(move || {
+            while let Ok(commands) = rx_command.recv() {
+                //debug!("received lossy commands {:?}", commands);
+                grpc_client.lock().unwrap().handle_commands(commands);
+            }
+            debug!("exit stream lossy command channel");
         });
     }
 
@@ -357,6 +467,55 @@ impl Session {
             }
             debug!("exit stream state channel");
         });
+    }
+
+    fn create_important_commands(commands: AnyCommands) -> AnyCommands {
+        let mut commands_important = AnyCommands {
+            commands: Vec::new(),
+        };
+
+        for mut cmd in commands.commands {
+            let mut cmd_important = cmd.clone();
+
+            match cmd_important.command {
+                Some(any_command::Command::ArmCommand(ref mut arm_cmd)) => {
+                    arm_cmd.arm_cartesian_goal = None;
+                }
+                Some(any_command::Command::HandCommand(ref mut hand_cmd)) => {
+                    hand_cmd.hand_goal = None;
+                }
+                Some(any_command::Command::NeckCommand(ref mut neck_cmd)) => {
+                    neck_cmd.neck_goal = None;
+                }
+                Some(any_command::Command::MobileBaseCommand(ref mut mobile_base_cmd)) => {
+                    mobile_base_cmd.target_direction = None;
+                }
+                None => {}
+            }
+
+            commands_important.commands.push(cmd_important);
+
+            match cmd.command {
+                Some(any_command::Command::ArmCommand(ref mut arm_cmd)) => {
+                    arm_cmd.speed_limit = None;
+                    arm_cmd.torque_limit = None;
+                    arm_cmd.turn_off = None;
+                    arm_cmd.turn_on = None;
+                }
+                Some(any_command::Command::HandCommand(ref mut hand_cmd)) => {
+                    hand_cmd.hand_goal = None;
+                }
+                Some(any_command::Command::NeckCommand(ref mut neck_cmd)) => {
+                    neck_cmd.neck_goal = None;
+                }
+                Some(any_command::Command::MobileBaseCommand(ref mut mobile_base_cmd)) => {
+                    mobile_base_cmd.target_direction = None;
+                }
+                None => {}
+            }
+        }
+
+        commands_important
     }
 
     fn create_webrtcbin(signaller: Arc<Mutex<Signallable>>, session_id: &String) -> gst::Element {
