@@ -1,7 +1,9 @@
 use clap::Parser;
-use log::info;
-
+use log::{debug, info};
+use signal_hook::{consts::SIGINT, iterator::Signals};
 mod webrtc;
+use std::sync::mpsc::channel;
+use std::thread;
 use webrtc::webrtc_bridge::WebRTCBridge;
 
 mod grpc;
@@ -54,7 +56,18 @@ fn main() {
     let uri = format!("ws://{}:{}", args.signalling_host, args.signalling_port);
     let grpc_address = format!("http://{}:{}", args.grpc_host, args.grpc_port);
 
-    let server = WebRTCBridge::new(uri, args.producer_name, grpc_address);
+    let (tx_stop_signal, rx_stop_signal) = channel::<bool>();
+
+    thread::spawn(move || {
+        let mut signals = Signals::new([SIGINT]).unwrap();
+        for sig in signals.forever() {
+            debug!("Received SIGINT signal: {:?}", sig);
+            let _ = tx_stop_signal.send(true);
+        }
+    });
+
+    let server = WebRTCBridge::new(uri, args.producer_name, grpc_address, rx_stop_signal);
+
     server.run();
     drop(server);
 

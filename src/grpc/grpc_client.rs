@@ -1,7 +1,5 @@
 use log::{debug, warn};
 
-use crate::grpc::reachy_api::reachy;
-use crate::grpc::reachy_api::reachy::part::arm;
 use crate::grpc::reachy_api::reachy::part::arm::arm_service_client::ArmServiceClient;
 use crate::grpc::reachy_api::reachy::part::head::head_service_client::HeadServiceClient;
 use crate::grpc::reachy_api::reachy::part::hand::hand_service_client::HandServiceClient;

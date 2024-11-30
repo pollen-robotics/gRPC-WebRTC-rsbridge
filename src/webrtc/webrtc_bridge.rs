@@ -11,27 +11,38 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::webrtc::session::Session;
-use std::sync::mpsc::channel;
+//use std::sync::mpsc::channel;
 
 pub struct WebRTCBridge {
     // pipeline: gst::Pipeline,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     signaller: Signaller,
-    rx: std::sync::mpsc::Receiver<bool>,
+    //rx: std::sync::mpsc::Receiver<bool>,
     main_loop: Arc<glib::MainLoop>,
 }
 
 impl WebRTCBridge {
-    pub fn new(uri: String, name: String, grpc_address: String) -> Self {
+    pub fn new(
+        uri: String,
+        name: String,
+        grpc_address: String,
+        rx_stop_signal: std::sync::mpsc::Receiver<bool>,
+    ) -> Self {
         debug!("Constructor GstWebRTCServer");
 
         gstrswebrtc::plugin_register_static().unwrap();
 
         let main_loop = Arc::new(glib::MainLoop::new(None, false));
+        let main_loop_clone = main_loop.clone();
+
+        std::thread::spawn(move || {
+            let _ = rx_stop_signal.recv();
+            main_loop_clone.quit();
+        });
 
         let sessions = Arc::new(Mutex::new(HashMap::<String, Session>::new()));
 
-        let (tx, rx) = channel::<bool>();
+        //let (tx, rx) = channel::<bool>();
         let signaller = Signaller::new(WebRTCSignallerRole::Producer);
         signaller.set_property("uri", &uri);
 
@@ -63,19 +74,28 @@ impl WebRTCBridge {
         signaller.connect_closure(
             "shutdown",
             false,
-            glib::closure!(|_signaler: glib::Object| {
-                //instance.imp().shutdown();
-                info!("shutdown");
-            }),
+            glib::closure!(
+                #[strong]
+                main_loop,
+                move |_signaler: glib::Object| {
+                    info!("Shutting down");
+                    main_loop.quit();
+                }
+            ),
         );
 
         signaller.connect_closure(
             "error",
             false,
-            glib::closure!(|_signaler: glib::Object, error: String| {
-                error!("Signalling error: {}. Shutting down", error);
-                tx.send(true).unwrap();
-            }),
+            glib::closure!(
+                #[strong]
+                main_loop,
+                move |_signaler: glib::Object, error: String| {
+                    error!("Signalling error: {}. Shutting down", error);
+                    //tx.send(true).unwrap();
+                    main_loop.quit();
+                }
+            ),
         );
 
         signaller.connect_closure(
@@ -84,6 +104,8 @@ impl WebRTCBridge {
             glib::closure!(
                 #[strong]
                 sessions,
+                #[strong]
+                main_loop,
                 move |_signaler: glib::Object,
                       session_id: &str,
                       peer_id: &str,
@@ -101,6 +123,7 @@ impl WebRTCBridge {
                             Arc::new(Mutex::new(_signaler.downcast::<Signallable>().unwrap())),
                             session_id.to_string(),
                             grpc_address.clone(),
+                            main_loop.clone(),
                         ),
                     );
                 }
@@ -163,18 +186,19 @@ impl WebRTCBridge {
 
         Self {
             //pipeline: pipeline,
-            sessions: sessions,
-            signaller: signaller,
-            rx: rx,
-            main_loop: main_loop,
+            sessions,
+            signaller,
+            //rx: rx,
+            main_loop,
         }
     }
 
     pub fn run(&self) {
         self.signaller.start();
-        info!("Signaller started");
-        _ = self.rx.recv().unwrap();
-        info!("Signaller stopped");
+        info!("Bridge started");
+        //_ = self.rx.recv().unwrap();
+        self.main_loop.run();
+        info!("Bridge stopped");
         self.signaller.stop();
     }
 }

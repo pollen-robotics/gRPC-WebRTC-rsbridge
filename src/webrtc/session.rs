@@ -1,8 +1,8 @@
 use crate::grpc::grpc_client::GrpcClient;
 use crate::grpc::reachy_api::bridge::service_request::Request;
 use crate::grpc::reachy_api::bridge::Connect;
-use crate::grpc::reachy_api::bridge::{any_command, AnyCommands, ServiceRequest};
 use crate::grpc::reachy_api::bridge::{service_response, ConnectionStatus, ServiceResponse};
+use crate::grpc::reachy_api::bridge::{AnyCommands, ServiceRequest};
 use crate::grpc::reachy_api::reachy::{ReachyId, ReachyState, ReachyStatus};
 
 use gst::glib;
@@ -32,6 +32,7 @@ impl Session {
         signaller: Arc<Mutex<Signallable>>,
         session_id: String,
         grpc_address: String,
+        main_loop: Arc<glib::MainLoop>,
     ) -> Self {
         debug!("Constructor Session with peer {}", peer_id);
 
@@ -40,11 +41,13 @@ impl Session {
         let (pipeline, webrtcbin) =
             Session::setup_webrtc(&peer_id, signaller, session_id, grpc_client);
 
+        Session::setup_bus_watch(&pipeline, main_loop);
+
         Self {
-            peer_id: peer_id,
-            pipeline: pipeline,
-            webrtcbin: webrtcbin,
-            tx_stop_thread: tx_stop_thread,
+            peer_id,
+            pipeline,
+            webrtcbin,
+            tx_stop_thread,
         }
     }
 
@@ -96,6 +99,33 @@ impl Session {
             }
         }
         (pipeline, webrtcbin_arc)
+    }
+
+    fn setup_bus_watch(pipeline: &gst::Pipeline, main_loop: Arc<glib::MainLoop>) {
+        let bus = pipeline.bus().unwrap();
+        let _bus_watch = bus
+            .add_watch(move |_bus, message| {
+                use gst::MessageView;
+                match message.view() {
+                    MessageView::Error(err) => {
+                        error!(
+                            "Error received from element {:?} {}",
+                            err.src().map(|s| s.path_string()),
+                            err.error()
+                        );
+                        error!("Debugging information: {:?}", err.debug());
+                        main_loop.quit();
+                        glib::ControlFlow::Break
+                    }
+                    MessageView::Eos(..) => {
+                        info!("Reached end of stream");
+                        main_loop.quit();
+                        glib::ControlFlow::Break
+                    }
+                    _ => glib::ControlFlow::Continue,
+                }
+            })
+            .unwrap();
     }
 
     fn stop(&self) {
@@ -273,11 +303,7 @@ impl Session {
                                                     return;
                                                 }
                                             };
-
-                                        //debug!("received lossy commands {:?}", commands);
                                         let _ = tx_lossy_command_clone.send(commands);
-                                        //let important_commmands =
-                                        //    Session::create_important_commands(commands);
                                     }
                                 ),
                             );
@@ -340,23 +366,6 @@ impl Session {
             }
             debug!("exit stream reliable command channel");
         });
-
-        /*channel_command.connect_closure(
-            "on-message-data",
-            false,
-            glib::closure!(move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
-                let commands: AnyCommands = match Message::decode(msg.as_ref()) {
-                    Ok(commands) => commands,
-                    Err(e) => {
-                        error!("Failed to decode message: {}", e);
-                        return;
-                    }
-                };
-
-                //debug!("received commands {:?}", commands);
-                let important_commmands = Session::create_important_commands(commands);
-            }),
-        );*/
     }
 
     fn configure_command_channel_lossy(
@@ -467,55 +476,6 @@ impl Session {
             }
             debug!("exit stream state channel");
         });
-    }
-
-    fn create_important_commands(commands: AnyCommands) -> AnyCommands {
-        let mut commands_important = AnyCommands {
-            commands: Vec::new(),
-        };
-
-        for mut cmd in commands.commands {
-            let mut cmd_important = cmd.clone();
-
-            match cmd_important.command {
-                Some(any_command::Command::ArmCommand(ref mut arm_cmd)) => {
-                    arm_cmd.arm_cartesian_goal = None;
-                }
-                Some(any_command::Command::HandCommand(ref mut hand_cmd)) => {
-                    hand_cmd.hand_goal = None;
-                }
-                Some(any_command::Command::NeckCommand(ref mut neck_cmd)) => {
-                    neck_cmd.neck_goal = None;
-                }
-                Some(any_command::Command::MobileBaseCommand(ref mut mobile_base_cmd)) => {
-                    mobile_base_cmd.target_direction = None;
-                }
-                None => {}
-            }
-
-            commands_important.commands.push(cmd_important);
-
-            match cmd.command {
-                Some(any_command::Command::ArmCommand(ref mut arm_cmd)) => {
-                    arm_cmd.speed_limit = None;
-                    arm_cmd.torque_limit = None;
-                    arm_cmd.turn_off = None;
-                    arm_cmd.turn_on = None;
-                }
-                Some(any_command::Command::HandCommand(ref mut hand_cmd)) => {
-                    hand_cmd.hand_goal = None;
-                }
-                Some(any_command::Command::NeckCommand(ref mut neck_cmd)) => {
-                    neck_cmd.neck_goal = None;
-                }
-                Some(any_command::Command::MobileBaseCommand(ref mut mobile_base_cmd)) => {
-                    mobile_base_cmd.target_direction = None;
-                }
-                None => {}
-            }
-        }
-
-        commands_important
     }
 
     fn create_webrtcbin(signaller: Arc<Mutex<Signallable>>, session_id: &String) -> gst::Element {
