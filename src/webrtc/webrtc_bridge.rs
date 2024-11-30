@@ -106,7 +106,7 @@ impl WebRTCBridge {
                 sessions,
                 #[strong]
                 main_loop,
-                move |_signaler: glib::Object,
+                move |signaler: glib::Object,
                       session_id: &str,
                       peer_id: &str,
                       offer: Option<&gstwebrtc::WebRTCSessionDescription>| {
@@ -116,16 +116,29 @@ impl WebRTCBridge {
                         warn!("Discarding received offer");
                     }
 
-                    sessions.lock().unwrap().insert(
+                    let signaler_arc =
+                        Arc::new(Mutex::new(signaler.downcast::<Signallable>().unwrap()));
+
+                    match Session::new(
+                        peer_id.to_string(),
+                        signaler_arc.clone(),
                         session_id.to_string(),
-                        Session::new(
-                            peer_id.to_string(),
-                            Arc::new(Mutex::new(_signaler.downcast::<Signallable>().unwrap())),
-                            session_id.to_string(),
-                            grpc_address.clone(),
-                            main_loop.clone(),
-                        ),
-                    );
+                        grpc_address.clone(),
+                        main_loop.clone(),
+                    ) {
+                        Ok(session) => sessions
+                            .lock()
+                            .unwrap()
+                            .insert(session_id.to_string(), session),
+                        Err(e) => {
+                            error!("{}. Make sure that the SDK server is up.", e);
+                            signaler_arc
+                                .lock()
+                                .unwrap()
+                                .emit_by_name::<bool>("session-ended", &[&session_id]);
+                            None
+                        }
+                    };
                 }
             ),
         );
@@ -185,10 +198,8 @@ impl WebRTCBridge {
         );
 
         Self {
-            //pipeline: pipeline,
             sessions,
             signaller,
-            //rx: rx,
             main_loop,
         }
     }
@@ -196,7 +207,6 @@ impl WebRTCBridge {
     pub fn run(&self) {
         self.signaller.start();
         info!("Bridge started");
-        //_ = self.rx.recv().unwrap();
         self.main_loop.run();
         info!("Bridge stopped");
         self.signaller.stop();

@@ -33,7 +33,7 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(address: String) -> Self {
+    pub fn new(address: String) -> Result<Self, tonic::transport::Error> {
         debug!("Constructor Grpc client {address}");
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -41,31 +41,21 @@ impl GrpcClient {
             .build()
             .unwrap();
 
-        let reachy_stub = rt
-            .block_on(ReachyServiceClient::connect(address.clone()))
-            .expect("Connection failed");
+        let reachy_stub = rt.block_on(ReachyServiceClient::connect(address.clone()))?;
 
-        let arm_stub = rt
-            .block_on(ArmServiceClient::connect(address.clone()))
-            .expect("Connection failed");
+        let arm_stub = rt.block_on(ArmServiceClient::connect(address.clone()))?;
 
-        let hand_stub = rt
-            .block_on(HandServiceClient::connect(address.clone()))
-            .expect("Connection failed");
+        let hand_stub = rt.block_on(HandServiceClient::connect(address.clone()))?;
 
-        let head_stub = rt
-            .block_on(HeadServiceClient::connect(address.clone()))
-            .expect("Connection failed");
+        let head_stub = rt.block_on(HeadServiceClient::connect(address.clone()))?;
 
-        let mobilebase_mobility_stub = rt
-            .block_on(MobileBaseMobilityServiceClient::connect(address.clone()))
-            .expect("Connection failed");
+        let mobilebase_mobility_stub =
+            rt.block_on(MobileBaseMobilityServiceClient::connect(address.clone()))?;
 
-        let mobilebase_utility_stub = rt
-            .block_on(MobileBaseUtilityServiceClient::connect(address))
-            .expect("Connection failed");
+        let mobilebase_utility_stub =
+            rt.block_on(MobileBaseUtilityServiceClient::connect(address))?;
 
-        Self {
+        Ok(Self {
             reachy_stub,
             arm_stub,
             head_stub,
@@ -74,7 +64,7 @@ impl GrpcClient {
             mobilebase_utility_stub,
             rt,
             stop_flag: Arc::new(AtomicBool::new(false)),
-        }
+        })
     }
 
     pub fn stop(&self) {
@@ -276,7 +266,7 @@ fn test_get_reachy() {
 
     let grpc_address = format!("http://localhost:50051");
 
-    let mut grpc_client = GrpcClient::new(grpc_address);
+    let mut grpc_client = GrpcClient::new(grpc_address).unwrap();
 
     let reachy: Reachy = grpc_client.get_reachy();
     let reachy_id = reachy.id.unwrap();

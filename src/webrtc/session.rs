@@ -5,7 +5,7 @@ use crate::grpc::reachy_api::bridge::{service_response, ConnectionStatus, Servic
 use crate::grpc::reachy_api::bridge::{AnyCommands, ServiceRequest};
 use crate::grpc::reachy_api::reachy::{ReachyId, ReachyState, ReachyStatus};
 
-use gst::glib;
+use gst::glib::{self};
 
 use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
@@ -33,39 +33,54 @@ impl Session {
         session_id: String,
         grpc_address: String,
         main_loop: Arc<glib::MainLoop>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         debug!("Constructor Session with peer {}", peer_id);
 
         let (grpc_client, tx_stop_thread) = Session::spawn_grpc_client(grpc_address);
+        let Some(grpc_client) = grpc_client else {
+            return Err("Cannot create grpc client".into());
+        };
 
         let (pipeline, webrtcbin) =
             Session::setup_webrtc(&peer_id, signaller, session_id, grpc_client);
 
         Session::setup_bus_watch(&pipeline, main_loop);
 
-        Self {
+        Ok(Self {
             peer_id,
             pipeline,
             webrtcbin,
-            tx_stop_thread,
-        }
+            tx_stop_thread: tx_stop_thread.unwrap(),
+        })
     }
 
     fn spawn_grpc_client(
         grpc_address: String,
-    ) -> (Arc<Mutex<GrpcClient>>, std::sync::mpsc::Sender<bool>) {
-        let (tx, rx) = channel();
+    ) -> (
+        Option<Arc<Mutex<GrpcClient>>>,
+        Option<std::sync::mpsc::Sender<bool>>,
+    ) {
+        let (tx, rx) = channel::<Option<Arc<Mutex<GrpcClient>>>>();
         let (tx_stop_thread, rx_stop_thread) = channel::<bool>();
+
         //grpc client uses the tonic async lib that can't run in the glib:closure where this Session is created
         thread::spawn(move || {
-            let grpc_client = Arc::new(Mutex::new(GrpcClient::new(grpc_address)));
-            tx.send(grpc_client.clone()).unwrap();
-            rx_stop_thread.recv().unwrap();
-            grpc_client.lock().unwrap().stop();
-            debug!("exit grpc thread");
+            let _grpc_client_result = match GrpcClient::new(grpc_address) {
+                Ok(client) => {
+                    let grpc_client = Arc::new(Mutex::new(client));
+                    tx.send(Some(grpc_client.clone())).unwrap();
+                    rx_stop_thread.recv().unwrap();
+                    grpc_client.lock().unwrap().stop();
+                    debug!("exit grpc thread");
+                }
+                Err(e) => {
+                    error!("Grpc client cannot be created: {}", e);
+                    tx.send(None).unwrap()
+                }
+            };
         });
         let grpc_client = rx.recv().unwrap();
-        (grpc_client, tx_stop_thread)
+        (grpc_client, Some(tx_stop_thread))
     }
 
     fn setup_webrtc(
