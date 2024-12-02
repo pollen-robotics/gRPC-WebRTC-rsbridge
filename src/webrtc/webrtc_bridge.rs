@@ -4,20 +4,18 @@ use gstrswebrtc::signaller::Signallable;
 use gstrswebrtc::signaller::SignallableExt;
 use gstrswebrtc::signaller::Signaller;
 use gstrswebrtc::signaller::WebRTCSignallerRole;
-
 use log::{debug, error, info, warn};
+use regex::Regex;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::webrtc::session::Session;
-//use std::sync::mpsc::channel;
 
 pub struct WebRTCBridge {
-    // pipeline: gst::Pipeline,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     signaller: Signaller,
-    //rx: std::sync::mpsc::Receiver<bool>,
     main_loop: Arc<glib::MainLoop>,
 }
 
@@ -42,7 +40,6 @@ impl WebRTCBridge {
 
         let sessions = Arc::new(Mutex::new(HashMap::<String, Session>::new()));
 
-        //let (tx, rx) = channel::<bool>();
         let signaller = Signaller::new(WebRTCSignallerRole::Producer);
         signaller.set_property("uri", &uri);
 
@@ -56,21 +53,43 @@ impl WebRTCBridge {
             }),
         );
 
+        /*signaller.connect_closure(
+            "end-session",
+            false,
+            glib::closure!(
+                #[strong]
+                sessions,
+                move |_signaler: glib::Object, session_id: &str| {
+                    info!("end-session signal {}", session_id);
+                    if let Some(session) = sessions.lock().unwrap().remove(session_id) {
+                        info!("end session {}", session_id);
+                        drop(session);
+                    } else {
+                        debug!("session-not-found {}", session_id);
+                    }
+                    false
+                }
+            ),
+        );*/
+
         signaller.connect_closure(
-            //"end-session",
             "session-ended",
             false,
             glib::closure!(
                 #[strong]
                 sessions,
                 move |_signaler: glib::Object, session_id: &str| {
-                    info!("session-ended {}", session_id);
-                    sessions.lock().unwrap().remove(session_id);
+                    info!("session-ended signal {}", session_id);
+                    if let Some(session) = sessions.lock().unwrap().remove(session_id) {
+                        drop(session);
+                        info!("session {} dropped", session_id);
+                    } else {
+                        debug!("session-not-found {}", session_id);
+                    }
                     false
                 }
             ),
         );
-
         signaller.connect_closure(
             "shutdown",
             false,
@@ -91,9 +110,14 @@ impl WebRTCBridge {
                 #[strong]
                 main_loop,
                 move |_signaler: glib::Object, error: String| {
-                    error!("Signalling error: {}. Shutting down", error);
-                    //tx.send(true).unwrap();
-                    main_loop.quit();
+                    let re = Regex::new(r"Session [0-9a-fA-F-]+ doesn't exist").unwrap();
+
+                    if re.is_match(&error) {
+                        warn!("Signalling error: {}.", error);
+                    } else {
+                        error!("Signalling error: {}. Shutting down", error);
+                        main_loop.quit();
+                    }
                 }
             ),
         );
@@ -131,11 +155,11 @@ impl WebRTCBridge {
                             .unwrap()
                             .insert(session_id.to_string(), session),
                         Err(e) => {
-                            error!("{}. Make sure that the SDK server is up.", e);
                             signaler_arc
                                 .lock()
                                 .unwrap()
-                                .emit_by_name::<bool>("session-ended", &[&session_id]);
+                                .emit_by_name::<bool>("end-session", &[&session_id]);
+                            error!("{}. Make sure that the SDK server is up.", e);
                             None
                         }
                     };
@@ -204,9 +228,19 @@ impl WebRTCBridge {
         }
     }
 
+    fn autoremove_stopped_sessions(sessions: Arc<Mutex<HashMap<String, Session>>>) {
+        std::thread::spawn(move || loop {
+            let mut sessions = sessions.lock().unwrap();
+            sessions.retain(|_, session| (*session).is_running());
+            drop(sessions);
+            std::thread::sleep(Duration::from_secs(5));
+        });
+    }
+
     pub fn run(&self) {
         self.signaller.start();
         info!("Bridge started");
+        WebRTCBridge::autoremove_stopped_sessions(self.sessions.clone());
         self.main_loop.run();
         info!("Bridge stopped");
         self.signaller.stop();

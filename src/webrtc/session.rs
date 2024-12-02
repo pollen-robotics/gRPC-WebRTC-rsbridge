@@ -11,8 +11,9 @@ use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
 use gstrswebrtc::signaller::SignallableExt;
 use gstwebrtc::WebRTCDataChannel;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use prost::Message;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::sync::mpsc::channel;
 
@@ -24,6 +25,7 @@ pub struct Session {
     pipeline: gst::Pipeline,
     webrtcbin: Arc<Mutex<gst::Element>>,
     tx_stop_thread: std::sync::mpsc::Sender<bool>,
+    running: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -36,13 +38,21 @@ impl Session {
     ) -> Result<Self, String> {
         debug!("Constructor Session with peer {}", peer_id);
 
-        let (grpc_client, tx_stop_thread) = Session::spawn_grpc_client(grpc_address);
+        let (grpc_client, tx_stop_thread) =
+            Session::spawn_grpc_client(grpc_address, signaller.clone(), session_id.clone());
         let Some(grpc_client) = grpc_client else {
             return Err("Cannot create grpc client".into());
         };
 
-        let (pipeline, webrtcbin) =
-            Session::setup_webrtc(&peer_id, signaller, session_id, grpc_client);
+        let running = Arc::new(AtomicBool::new(true));
+
+        let (pipeline, webrtcbin) = Session::setup_webrtc(
+            &peer_id,
+            signaller,
+            session_id,
+            grpc_client,
+            running.clone(),
+        );
 
         Session::setup_bus_watch(&pipeline, main_loop);
 
@@ -51,11 +61,14 @@ impl Session {
             pipeline,
             webrtcbin,
             tx_stop_thread: tx_stop_thread.unwrap(),
+            running,
         })
     }
 
     fn spawn_grpc_client(
         grpc_address: String,
+        signaller: Arc<Mutex<Signallable>>,
+        session_id: String,
     ) -> (
         Option<Arc<Mutex<GrpcClient>>>,
         Option<std::sync::mpsc::Sender<bool>>,
@@ -63,9 +76,15 @@ impl Session {
         let (tx, rx) = channel::<Option<Arc<Mutex<GrpcClient>>>>();
         let (tx_stop_thread, rx_stop_thread) = channel::<bool>();
 
+        let tx_stop_thread_clone = tx_stop_thread.clone();
         //grpc client uses the tonic async lib that can't run in the glib:closure where this Session is created
         thread::spawn(move || {
-            let _grpc_client_result = match GrpcClient::new(grpc_address) {
+            let _grpc_client_result = match GrpcClient::new(
+                grpc_address,
+                Some(signaller),
+                Some(session_id),
+                Some(tx_stop_thread_clone),
+            ) {
                 Ok(client) => {
                     let grpc_client = Arc::new(Mutex::new(client));
                     tx.send(Some(grpc_client.clone())).unwrap();
@@ -88,6 +107,7 @@ impl Session {
         signaller: Arc<Mutex<Signallable>>,
         session_id: String,
         grpc_client: Arc<Mutex<GrpcClient>>,
+        running: Arc<AtomicBool>,
     ) -> (gst::Pipeline, Arc<Mutex<gst::Element>>) {
         let pipeline = gst::Pipeline::builder()
             .name(format!("session-pipeline-{peer_id}"))
@@ -103,7 +123,7 @@ impl Session {
         match ret {
             Ok(gst::StateChangeSuccess::Success) | Ok(gst::StateChangeSuccess::Async) => {
                 // Pipeline state changed successfully
-                Session::create_data_channels(webrtcbin_arc.clone(), grpc_client);
+                Session::create_data_channels(webrtcbin_arc.clone(), grpc_client, running);
                 Session::create_offer(webrtcbin_arc.clone(), signaller, session_id);
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
@@ -143,8 +163,19 @@ impl Session {
             .unwrap();
     }
 
+    pub fn is_running(&self) -> bool {
+        return self.running.load(Ordering::Relaxed);
+    }
+
     fn stop(&self) {
-        let ret = self.pipeline.set_state(gst::State::Null);
+        debug!("stop session");
+        Session::stop_pipeline(&self.pipeline);
+        let _ = self.tx_stop_thread.send(true);
+    }
+
+    fn stop_pipeline(pipeline: &gst::Pipeline) {
+        debug!("stop pipeline");
+        let ret = pipeline.set_state(gst::State::Null);
         match ret {
             Ok(gst::StateChangeSuccess::Success) | Ok(gst::StateChangeSuccess::Async) => {
                 // Pipeline state changed successfully
@@ -156,12 +187,12 @@ impl Session {
                 error!("Failed to transition pipeline to NULL: {:?}", err);
             }
         }
-        let _ = self.tx_stop_thread.send(true);
     }
 
     fn create_data_channels(
         webrtcbin: Arc<Mutex<gst::Element>>,
         grpc_client: Arc<Mutex<GrpcClient>>,
+        running: Arc<AtomicBool>,
     ) {
         let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
             "create-data-channel",
@@ -175,7 +206,7 @@ impl Session {
 
         // there is a deadlock that prevents from creating data channel from the glib closure
         let (tx, rx) = std::sync::mpsc::channel();
-        Session::handle_connect_request(rx, webrtcbin, grpc_client.clone());
+        Session::handle_connect_request(rx, webrtcbin, grpc_client.clone(), running);
 
         channel.connect_closure(
             "on-message-data",
@@ -229,6 +260,7 @@ impl Session {
         rx: std::sync::mpsc::Receiver<Connect>,
         webrtcbin: Arc<Mutex<gst::Element>>,
         grpc_client: Arc<Mutex<GrpcClient>>,
+        running: Arc<AtomicBool>,
     ) {
         thread::spawn(move || {
             let connect = rx.recv().unwrap();
@@ -237,8 +269,9 @@ impl Session {
 
             let (tx_state, rx_state) = std::sync::mpsc::channel();
             let (tx_audit, rx_audit) = std::sync::mpsc::channel();
-            let (tx_reliable_command, rx_reliable_command) = std::sync::mpsc::channel();
-            let (tx_lossy_command, rx_lossy_command) = std::sync::mpsc::channel();
+            let (tx_reliable_command, rx_reliable_command) =
+                std::sync::mpsc::channel::<AnyCommands>();
+            let (tx_lossy_command, rx_lossy_command) = std::sync::mpsc::channel::<AnyCommands>();
 
             //configure channels before any data is sent
             webrtcbin.lock().unwrap().connect_closure(
@@ -257,7 +290,6 @@ impl Session {
                             error
                         );
                     });
-
                     let tx_state_clone = tx_state.clone();
                     let tx_audit_clone = tx_audit.clone();
                     let tx_reliable_command_clone = tx_reliable_command.clone();
@@ -265,64 +297,60 @@ impl Session {
                     if name == format!("reachy_state_{}", id) {
                         channel.connect_on_open(move |_| {
                             info!("Data channel state opened");
-                            let _ = tx_state_clone.send(true);
+                            tx_state_clone.send(true).unwrap();
                         });
                     } else if name == format!("reachy_audit_{}", id) {
                         channel.connect_on_open(move |_| {
                             info!("Data channel audit opened");
-                            let _ = tx_audit_clone.send(true);
+                            tx_audit_clone.send(true).unwrap();
                         });
                     } else if name == format!("reachy_command_reliable_{}", id) {
                         channel.connect_on_open(move |channel_command: &WebRTCDataChannel| {
                             info!("Data channel command reliable opened");
-                            channel_command.connect_closure(
-                                "on-message-data",
-                                false,
-                                glib::closure!(
-                                    #[strong]
-                                    tx_reliable_command_clone,
-                                    move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
-                                        let commands: AnyCommands =
-                                            match Message::decode(msg.as_ref()) {
-                                                Ok(commands) => commands,
-                                                Err(e) => {
-                                                    error!("Failed to decode message: {}", e);
-                                                    return;
-                                                }
-                                            };
+                            let tx_reliable_command_clone2 = tx_reliable_command_clone.clone();
+                            channel_command.connect_on_message_data(
+                                move |_: &WebRTCDataChannel, msg: Option<&glib::Bytes>| {
+                                    let Some(data) = msg else {
+                                        warn!("reliable message is None");
+                                        return;
+                                    };
+                                    let commands = match Message::decode(data.as_ref()) {
+                                        Ok(commands) => commands,
 
-                                        //debug!("received reliable commands {:?}", commands);
-                                        let _ = tx_reliable_command_clone.send(commands);
-                                        //let important_commmands =
-                                        //    Session::create_important_commands(commands);
-                                    }
-                                ),
+                                        Err(e) => {
+                                            error!("Failed to decode message: {}", e);
+                                            return;
+                                        }
+                                    };
+                                    tx_reliable_command_clone2.send(commands).unwrap();
+                                },
                             );
                         });
                     } else if name == format!("reachy_command_lossy_{}", id) {
                         channel.connect_on_open(move |channel_command: &WebRTCDataChannel| {
                             info!("Data channel command lossy opened");
-                            //let _ = tx_command_clone.send(true);
-                            channel_command.connect_closure(
-                                "on-message-data",
-                                false,
-                                glib::closure!(
-                                    #[strong]
-                                    tx_lossy_command_clone,
-                                    move |_channel: &WebRTCDataChannel, msg: &glib::Bytes| {
-                                        let commands: AnyCommands =
-                                            match Message::decode(msg.as_ref()) {
-                                                Ok(commands) => commands,
-                                                Err(e) => {
-                                                    error!("Failed to decode message: {}", e);
-                                                    return;
-                                                }
-                                            };
-                                        let _ = tx_lossy_command_clone.send(commands);
-                                    }
-                                ),
+                            let tx_lossy_command_clone2 = tx_lossy_command_clone.clone();
+                            channel_command.connect_on_message_data(
+                                move |_: &WebRTCDataChannel, msg: Option<&glib::Bytes>| {
+                                    let Some(data) = msg else {
+                                        warn!("lossy message is None");
+                                        return;
+                                    };
+                                    let commands = match Message::decode(data.as_ref()) {
+                                        Ok(commands) => commands,
+
+                                        Err(e) => {
+                                            error!("Failed to decode message: {}", e);
+                                            return;
+                                        }
+                                    };
+                                    tx_lossy_command_clone2.send(commands).unwrap();
+                                },
                             );
                         });
+                        /*channel.connect_on_close(move |channel_command: &WebRTCDataChannel| {
+                            info!("close lossy")
+                        });*/
                     }
                 }),
             );
@@ -334,6 +362,7 @@ impl Session {
                 reachyid.clone(),
                 connect.update_frequency,
                 rx_state,
+                running.clone(),
             );
 
             Session::configure_audit_channel(
@@ -343,6 +372,7 @@ impl Session {
                 reachyid,
                 connect.audit_frequency,
                 rx_audit,
+                running.clone(),
             );
 
             Session::configure_command_channel_reliable(
@@ -350,9 +380,16 @@ impl Session {
                 webrtcbin.clone(),
                 grpc_client.clone(),
                 rx_reliable_command,
+                running.clone(),
             );
 
-            Session::configure_command_channel_lossy(id, webrtcbin, grpc_client, rx_lossy_command);
+            Session::configure_command_channel_lossy(
+                id,
+                webrtcbin,
+                grpc_client,
+                rx_lossy_command,
+                running,
+            );
 
             debug!("exit create channels");
         });
@@ -363,6 +400,7 @@ impl Session {
         webrtcbin: Arc<Mutex<gst::Element>>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         rx_command: std::sync::mpsc::Receiver<AnyCommands>,
+        running: Arc<AtomicBool>,
     ) {
         let _channel_command = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
             "create-data-channel",
@@ -376,8 +414,17 @@ impl Session {
 
         thread::spawn(move || {
             while let Ok(commands) = rx_command.recv() {
-                debug!("received reliable commands {:?}", commands);
-                grpc_client.lock().unwrap().handle_commands(commands);
+                trace!("received reliable commands {:?}", commands);
+                if grpc_client
+                    .lock()
+                    .unwrap()
+                    .handle_commands(commands)
+                    .is_err()
+                {
+                    //Session::stop_pipeline(&pipeline);
+                    running.store(false, Ordering::Relaxed);
+                    break;
+                };
             }
             debug!("exit stream reliable command channel");
         });
@@ -388,6 +435,7 @@ impl Session {
         webrtcbin: Arc<Mutex<gst::Element>>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         rx_command: std::sync::mpsc::Receiver<AnyCommands>,
+        running: Arc<AtomicBool>,
     ) {
         let _channel_command = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
             "create-data-channel",
@@ -403,7 +451,15 @@ impl Session {
         thread::spawn(move || {
             while let Ok(commands) = rx_command.recv() {
                 //debug!("received lossy commands {:?}", commands);
-                grpc_client.lock().unwrap().handle_commands(commands);
+                if grpc_client
+                    .lock()
+                    .unwrap()
+                    .handle_commands(commands)
+                    .is_err()
+                {
+                    running.store(false, Ordering::Relaxed);
+                    break;
+                };
             }
             debug!("exit stream lossy command channel");
         });
@@ -416,6 +472,7 @@ impl Session {
         reachy: Option<ReachyId>,
         update_frequency: f32,
         rx_audit: std::sync::mpsc::Receiver<bool>,
+        running: Arc<AtomicBool>,
     ) {
         let max_packet_lifetime = if update_frequency > 1000f32 {
             1
@@ -447,6 +504,7 @@ impl Session {
                 let data = glib::Bytes::from_owned(status.encode_to_vec());
                 channel.send_data(Some(&data));
             }
+            running.store(false, Ordering::Relaxed);
             debug!("exit stream status channel");
         });
     }
@@ -458,6 +516,7 @@ impl Session {
         reachy: Option<ReachyId>,
         update_frequency: f32,
         rx_state: std::sync::mpsc::Receiver<bool>,
+        running: Arc<AtomicBool>,
     ) {
         let max_packet_lifetime = if update_frequency > 1000f32 {
             1
@@ -489,6 +548,7 @@ impl Session {
                 let data = glib::Bytes::from_owned(state.encode_to_vec());
                 channel.send_data(Some(&data));
             }
+            running.store(false, Ordering::Relaxed);
             debug!("exit stream state channel");
         });
     }

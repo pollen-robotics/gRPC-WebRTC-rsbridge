@@ -849,6 +849,7 @@ dependencies = [
  "mpsc",
  "prost",
  "prost-types",
+ "regex",
  "signal-hook",
  "tokio",
  "tonic",
