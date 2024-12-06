@@ -13,9 +13,11 @@ use gstrswebrtc::signaller::SignallableExt;
 use gstwebrtc::WebRTCDataChannel;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use std::collections::VecDeque;
 use std::sync::mpsc::channel;
+use std::time::Duration;
 
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -348,9 +350,6 @@ impl Session {
                                 },
                             );
                         });
-                        /*channel.connect_on_close(move |channel_command: &WebRTCDataChannel| {
-                            info!("close lossy")
-                        });*/
                     }
                 }),
             );
@@ -414,14 +413,13 @@ impl Session {
 
         thread::spawn(move || {
             while let Ok(commands) = rx_command.recv() {
-                trace!("received reliable commands {:?}", commands);
+                debug!("received reliable commands {:?}", commands);
                 if grpc_client
                     .lock()
                     .unwrap()
                     .handle_commands(commands)
                     .is_err()
                 {
-                    //Session::stop_pipeline(&pipeline);
                     running.store(false, Ordering::Relaxed);
                     break;
                 };
@@ -448,19 +446,118 @@ impl Session {
             ],
         );
 
+        let command_counter = Arc::new(AtomicU64::new(0));
+        let command_counter_clone = command_counter.clone();
+        let drop_counter = Arc::new(AtomicU64::new(0));
+        let drop_counter_clone = drop_counter.clone();
+        let running_clone = running.clone();
+
+        thread::spawn(move || {
+            let mut command_counter_old = 0u64;
+            let mut drop_counter_old = 0u64;
+            let display_frequency = 1u64;
+            while running_clone.load(Ordering::Relaxed) {
+                let current_counter_command = command_counter_clone.load(Ordering::Relaxed);
+                let current_drop_counter = drop_counter_clone.load(Ordering::Relaxed);
+                let freq_command =
+                    (current_counter_command - command_counter_old) / display_frequency;
+                let freq_drop = (current_drop_counter - drop_counter_old) / display_frequency;
+                info!("Lossy Command freq: {freq_command} Hz - Drop frequency: {freq_drop} Hz");
+                command_counter_old = current_counter_command;
+                drop_counter_old = current_drop_counter;
+                std::thread::sleep(Duration::from_secs(display_frequency));
+            }
+        });
+
+        let queue_commands = Arc::new(Mutex::new(VecDeque::new()));
+        let queue_commands_clone = queue_commands.clone();
+        let running_clone = running.clone();
+
+        thread::spawn(move || {
+            while running.load(Ordering::Relaxed) {
+                /*if let Some(commands) = queue_commands_clone.lock().unwrap().pop_front() {
+                    /*let mut grpc_client_lock = grpc_client.try_lock();
+                    if let Ok(ref mut client) = grpc_client_lock {
+                        if client.handle_commands(commands).is_err() {
+                            running.store(false, Ordering::Relaxed);
+                            break;
+                        } else {
+                            let counter = command_counter.load(Ordering::Relaxed) + 1;
+                            command_counter.store(counter, Ordering::Relaxed);
+                        }
+                    } else {
+                        // warn!("Dropping lossing command");
+                        let counter = drop_counter.load(Ordering::Relaxed) + 1;
+                        drop_counter.store(counter, Ordering::Relaxed);
+                    }*/
+                    //debug!("read");
+                    if grpc_client
+                        .lock()
+                        .unwrap()
+                        .handle_commands(commands)
+                        .is_err()
+                    {
+                        running.store(false, Ordering::Relaxed);
+                        break;
+                    };
+                } else {
+                    //debug!("sleep");
+                    //expect freq 120Hz -> 8ms. ToDo get timestamp from commands
+                    std::thread::sleep(Duration::from_millis(1));
+                }*/
+                let mut queue_commands_lock = queue_commands_clone.try_lock();
+                if let Ok(ref mut queue) = queue_commands_lock {
+                    if let Some(commands) = queue.pop_front() {
+                        //debug!("play");
+                        if grpc_client
+                            .lock()
+                            .unwrap()
+                            .handle_commands(commands)
+                            .is_err()
+                        {
+                            running.store(false, Ordering::Relaxed);
+                            break;
+                        };
+                    }
+                }
+                drop(queue_commands_lock);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+
         thread::spawn(move || {
             while let Ok(commands) = rx_command.recv() {
                 //debug!("received lossy commands {:?}", commands);
-                if grpc_client
-                    .lock()
-                    .unwrap()
-                    .handle_commands(commands)
-                    .is_err()
-                {
-                    running.store(false, Ordering::Relaxed);
-                    break;
-                };
+                let mut queue_commands_lock = queue_commands.try_lock(); //.push_back(commands);
+                if let Ok(ref mut queue) = queue_commands_lock {
+                    queue.push_back(commands);
+                    //debug!("push");
+                    let counter = command_counter.load(Ordering::Relaxed) + 1;
+                    command_counter.store(counter, Ordering::Relaxed);
+                } else {
+                    let counter = drop_counter.load(Ordering::Relaxed) + 1;
+                    drop_counter.store(counter, Ordering::Relaxed);
+                }
+                drop(queue_commands_lock);
+                std::thread::sleep(Duration::from_millis(1));
+                /*let mut grpc_client_lock = grpc_client.try_lock();
+                if let Ok(ref mut client) = grpc_client_lock {
+                    if client.handle_commands(commands).is_err() {
+                        running.store(false, Ordering::Relaxed);
+                        break;
+                    } else {
+                        let counter = command_counter.load(Ordering::Relaxed) + 1;
+                        command_counter.store(counter, Ordering::Relaxed);
+                    }
+                } else {
+                    // warn!("Dropping lossing command");
+                    let counter = drop_counter.load(Ordering::Relaxed) + 1;
+                    drop_counter.store(counter, Ordering::Relaxed);
+                }*/
+
+                //Todo add in a buffer
             }
+            running_clone.store(false, Ordering::Relaxed);
             debug!("exit stream lossy command channel");
         });
     }
