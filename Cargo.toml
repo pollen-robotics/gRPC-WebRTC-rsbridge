@@ -1,24 +1,10 @@
-[package]
-name = "grpc-webrtc-rsbridge"
-version = "0.1.0"
+[workspace]
+members = ["grpc-webrtc-rsbridge", "reachy-api", "simulator"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
 edition = "2021"
-
-[dependencies]
-clap = { version = "4.5.18", features = ["derive"] }
-env_logger = "0.11.5"
-log = "0.4.22"
-gst = { version = "0.23.3", package = "gstreamer" }
-gst-plugin-webrtc = { version = "0.13.3", default-features = false }
-gstwebrtc = { version = "0.23.2", package = "gstreamer-webrtc" }
-glib = "0.19"
-mpsc = "0.2.3"
-tonic = "0.12.3"
-prost = "0.13.3"
-prost-types = "0.13.3"
-tokio = "1.41.1"
-signal-hook = "0.3.17"
-regex = "1.11.1"
-
-
-[build-dependencies]
-tonic-build = "0.12.3"
+authors = ["Pollen Robotics"]
+description = "Bridge SDK server (grpc) through WebRTC"
+documentation = "https://www.pollen-robotics.com"

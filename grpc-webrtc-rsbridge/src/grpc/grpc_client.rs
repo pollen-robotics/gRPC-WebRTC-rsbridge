@@ -1,25 +1,26 @@
 use log::{debug, error, trace, warn};
 
-use crate::grpc::reachy_api::reachy::part::arm::arm_service_client::ArmServiceClient;
-use crate::grpc::reachy_api::reachy::part::head::head_service_client::HeadServiceClient;
-use crate::grpc::reachy_api::reachy::part::hand::hand_service_client::HandServiceClient;
-use crate::grpc::reachy_api::reachy::part::mobile::base::mobility::mobile_base_mobility_service_client::MobileBaseMobilityServiceClient;
-use crate::grpc::reachy_api::reachy::part::mobile::base::utility::mobile_base_utility_service_client::MobileBaseUtilityServiceClient;
-use crate::grpc::reachy_api::reachy::reachy_service_client::ReachyServiceClient;
-use crate::grpc::reachy_api::reachy::Reachy;
-use crate::grpc::reachy_api::reachy::ReachyStreamAuditRequest;
-use crate::grpc::reachy_api::reachy::ReachyStreamStateRequest;
+use reachy_api::reachy::part::arm::arm_service_client::ArmServiceClient;
+use reachy_api::reachy::part::hand::hand_service_client::HandServiceClient;
+use reachy_api::reachy::part::head::head_service_client::HeadServiceClient;
+use reachy_api::reachy::part::mobile::base::mobility::mobile_base_mobility_service_client::MobileBaseMobilityServiceClient;
+use reachy_api::reachy::part::mobile::base::utility::mobile_base_utility_service_client::MobileBaseUtilityServiceClient;
+use reachy_api::reachy::reachy_service_client::ReachyServiceClient;
+use reachy_api::reachy::Reachy;
+use reachy_api::reachy::ReachyStreamAuditRequest;
+use reachy_api::reachy::ReachyStreamStateRequest;
+
+use reachy_api::reachy::ReachyState;
+use reachy_api::reachy::ReachyStatus;
 use tokio::runtime::Runtime;
 use tonic::transport::Channel;
 
-use super::reachy_api::reachy::ReachyId;
-use super::reachy_api::reachy::ReachyState;
-use super::reachy_api::reachy::ReachyStatus;
-use crate::grpc::reachy_api::bridge::{
-    any_command, AnyCommands, ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
-};
 use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
+use reachy_api::bridge::{
+    any_command, AnyCommands, ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
+};
+use reachy_api::reachy::ReachyId;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 

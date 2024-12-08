@@ -1,9 +1,9 @@
 use crate::grpc::grpc_client::GrpcClient;
-use crate::grpc::reachy_api::bridge::service_request::Request;
-use crate::grpc::reachy_api::bridge::Connect;
-use crate::grpc::reachy_api::bridge::{service_response, ConnectionStatus, ServiceResponse};
-use crate::grpc::reachy_api::bridge::{AnyCommands, ServiceRequest};
-use crate::grpc::reachy_api::reachy::{ReachyId, ReachyState, ReachyStatus};
+use reachy_api::bridge::service_request::Request;
+use reachy_api::bridge::Connect;
+use reachy_api::bridge::{service_response, ConnectionStatus, ServiceResponse};
+use reachy_api::bridge::{AnyCommands, ServiceRequest};
+use reachy_api::reachy::{ReachyId, ReachyState, ReachyStatus};
 
 use gst::glib::{self};
 
@@ -11,7 +11,7 @@ use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
 use gstrswebrtc::signaller::SignallableExt;
 use gstwebrtc::WebRTCDataChannel;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 use prost::Message;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
