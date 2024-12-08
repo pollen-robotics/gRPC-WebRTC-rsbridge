@@ -2232,6 +2232,17 @@ dependencies = [
 [[package]]
 name = "simulator"
 version = "1.0.0"
+dependencies = [
+ "clap",
+ "env_logger",
+ "glib 0.19.9",
+ "gst-plugin-webrtc",
+ "gstreamer",
+ "gstreamer-webrtc",
+ "log",
+ "mpsc",
+ "signal-hook",
+]
 
 [[package]]
 name = "slab"
