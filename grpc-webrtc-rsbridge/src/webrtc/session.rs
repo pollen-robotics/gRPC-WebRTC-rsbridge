@@ -126,6 +126,7 @@ impl Session {
             Ok(gst::StateChangeSuccess::Success) | Ok(gst::StateChangeSuccess::Async) => {
                 // Pipeline state changed successfully
                 Session::create_data_channels(webrtcbin_arc.clone(), grpc_client, running);
+                info!("data cannel");
                 Session::create_offer(webrtcbin_arc.clone(), signaller, session_id);
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {

@@ -2241,6 +2241,8 @@ dependencies = [
  "gstreamer-webrtc",
  "log",
  "mpsc",
+ "prost",
+ "reachy-api",
  "signal-hook",
 ]
 

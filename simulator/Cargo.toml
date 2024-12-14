@@ -7,6 +7,7 @@ description.workspace = true
 documentation.workspace = true
 
 [dependencies]
+reachy-api = { path = "../reachy-api" }
 clap = { version = "4.5.18", features = ["derive"] }
 env_logger = "0.11.5"
 log = "0.4.22"
@@ -16,3 +17,4 @@ gstwebrtc = { version = "0.23.2", package = "gstreamer-webrtc" }
 glib = "0.19"
 mpsc = "0.2.3"
 signal-hook = "0.3.17"
+prost = "0.13.3"
