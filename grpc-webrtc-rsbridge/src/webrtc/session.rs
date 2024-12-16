@@ -5,7 +5,7 @@ use reachy_api::bridge::{service_response, ConnectionStatus, ServiceResponse};
 use reachy_api::bridge::{AnyCommands, ServiceRequest};
 use reachy_api::reachy::{ReachyId, ReachyState, ReachyStatus};
 
-use gst::glib::{self};
+use gst::glib::{self, WeakRef};
 
 use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
@@ -22,10 +22,13 @@ use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crate::webrtc::stats::Stats;
+
 pub struct Session {
     peer_id: String,
     pipeline: gst::Pipeline,
-    webrtcbin: Arc<Mutex<gst::Element>>,
+    //webrtcbin: Arc<Mutex<gst::Element>>,
+    webrtcbin: gst::Element,
     tx_stop_thread: std::sync::mpsc::Sender<bool>,
     running: Arc<AtomicBool>,
 }
@@ -33,7 +36,8 @@ pub struct Session {
 impl Session {
     pub fn new(
         peer_id: String,
-        signaller: Arc<Mutex<Signallable>>,
+        //signaller: Arc<Mutex<Signallable>>,
+        signaller: WeakRef<Signallable>,
         session_id: String,
         grpc_address: String,
         main_loop: Arc<glib::MainLoop>,
@@ -69,7 +73,7 @@ impl Session {
 
     fn spawn_grpc_client(
         grpc_address: String,
-        signaller: Arc<Mutex<Signallable>>,
+        signaller: WeakRef<Signallable>,
         session_id: String,
     ) -> (
         Option<Arc<Mutex<GrpcClient>>>,
@@ -83,7 +87,7 @@ impl Session {
         thread::spawn(move || {
             let _grpc_client_result = match GrpcClient::new(
                 grpc_address,
-                Some(signaller),
+                signaller,
                 Some(session_id),
                 Some(tx_stop_thread_clone),
             ) {
@@ -106,11 +110,11 @@ impl Session {
 
     fn setup_webrtc(
         peer_id: &String,
-        signaller: Arc<Mutex<Signallable>>,
+        signaller: WeakRef<Signallable>,
         session_id: String,
         grpc_client: Arc<Mutex<GrpcClient>>,
         running: Arc<AtomicBool>,
-    ) -> (gst::Pipeline, Arc<Mutex<gst::Element>>) {
+    ) -> (gst::Pipeline, gst::Element) {
         let pipeline = gst::Pipeline::builder()
             .name(format!("session-pipeline-{peer_id}"))
             .build();
@@ -119,15 +123,17 @@ impl Session {
 
         pipeline.add(&webrtcbin).unwrap();
 
-        let webrtcbin_arc = Arc::new(Mutex::new(webrtcbin));
+        //let webrtcbin_arc = Arc::new(Mutex::new(webrtcbin));
+        let webrtcbin_ref = webrtcbin.downgrade();
 
         let ret = pipeline.set_state(gst::State::Playing);
         match ret {
             Ok(gst::StateChangeSuccess::Success) | Ok(gst::StateChangeSuccess::Async) => {
                 // Pipeline state changed successfully
-                Session::create_data_channels(webrtcbin_arc.clone(), grpc_client, running);
-                info!("data cannel");
-                Session::create_offer(webrtcbin_arc.clone(), signaller, session_id);
+                Session::create_data_channels(webrtcbin_ref.clone(), grpc_client, running);
+                info!("data channel");
+                Session::create_offer(webrtcbin_ref.clone(), signaller, session_id);
+                Session::setup_stats(webrtcbin_ref);
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
                 error!("Failed to transition pipeline to PLAYING: No preroll data available");
@@ -136,7 +142,14 @@ impl Session {
                 error!("Failed to transition pipeline to PLAYING: {:?}", err);
             }
         }
-        (pipeline, webrtcbin_arc)
+        (pipeline, webrtcbin)
+    }
+
+    fn setup_stats(webrtcbin: WeakRef<gst::Element>) {
+        thread::spawn(move || {
+            let stats = Stats::new(webrtcbin);
+            stats.run();
+        });
     }
 
     fn setup_bus_watch(pipeline: &gst::Pipeline, main_loop: Arc<glib::MainLoop>) {
@@ -193,19 +206,23 @@ impl Session {
     }
 
     fn create_data_channels(
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        //webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         running: Arc<AtomicBool>,
     ) {
-        let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
-            "create-data-channel",
-            &[
-                &"service",
-                &gst::Structure::builder("config")
-                    .field("ordered", true)
-                    .build(),
-            ],
-        );
+        let channel = webrtcbin
+            .upgrade()
+            .unwrap()
+            .emit_by_name::<WebRTCDataChannel>(
+                "create-data-channel",
+                &[
+                    &"service",
+                    &gst::Structure::builder("config")
+                        .field("ordered", true)
+                        .build(),
+                ],
+            );
 
         // there is a deadlock that prevents from creating data channel from the glib closure
         let (tx, rx) = std::sync::mpsc::channel();
@@ -244,6 +261,7 @@ impl Session {
                         _channel.send_data(Some(&data));
                     }
                     Some(Request::Connect(connect_request)) => {
+                        info!("Received Connect Request");
                         let _ = tx.send(connect_request);
                     }
                     Some(Request::Disconnect(_)) => {
@@ -261,7 +279,7 @@ impl Session {
 
     fn handle_connect_request(
         rx: std::sync::mpsc::Receiver<Connect>,
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         running: Arc<AtomicBool>,
     ) {
@@ -277,7 +295,7 @@ impl Session {
             let (tx_lossy_command, rx_lossy_command) = std::sync::mpsc::channel::<AnyCommands>();
 
             //configure channels before any data is sent
-            webrtcbin.lock().unwrap().connect_closure(
+            webrtcbin.upgrade().unwrap().connect_closure(
                 "prepare-data-channel",
                 false,
                 glib::closure!(move |_webrtcbin: &gst::Element,
@@ -397,20 +415,23 @@ impl Session {
 
     fn configure_command_channel_reliable(
         id: u32,
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         rx_command: std::sync::mpsc::Receiver<AnyCommands>,
         running: Arc<AtomicBool>,
     ) {
-        let _channel_command = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
-            "create-data-channel",
-            &[
-                &format!("reachy_command_reliable_{}", id),
-                &gst::Structure::builder("config")
-                    .field("ordered", true)
-                    .build(),
-            ],
-        );
+        let _channel_command = webrtcbin
+            .upgrade()
+            .unwrap()
+            .emit_by_name::<WebRTCDataChannel>(
+                "create-data-channel",
+                &[
+                    &format!("reachy_command_reliable_{}", id),
+                    &gst::Structure::builder("config")
+                        .field("ordered", true)
+                        .build(),
+                ],
+            );
 
         thread::spawn(move || {
             while let Ok(commands) = rx_command.recv() {
@@ -431,21 +452,24 @@ impl Session {
 
     fn configure_command_channel_lossy(
         id: u32,
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         rx_command: std::sync::mpsc::Receiver<AnyCommands>,
         running: Arc<AtomicBool>,
     ) {
-        let _channel_command = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
-            "create-data-channel",
-            &[
-                &format!("reachy_command_lossy_{}", id),
-                &gst::Structure::builder("config")
-                    .field("ordered", true)
-                    .field("max-retransmits", 0)
-                    .build(),
-            ],
-        );
+        let _channel_command = webrtcbin
+            .upgrade()
+            .unwrap()
+            .emit_by_name::<WebRTCDataChannel>(
+                "create-data-channel",
+                &[
+                    &format!("reachy_command_lossy_{}", id),
+                    &gst::Structure::builder("config")
+                        .field("ordered", true)
+                        .field("max-retransmits", 0)
+                        .build(),
+                ],
+            );
 
         let command_counter = Arc::new(AtomicU64::new(0));
         let command_counter_clone = command_counter.clone();
@@ -565,7 +589,7 @@ impl Session {
 
     fn configure_audit_channel(
         id: u32,
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         reachy: Option<ReachyId>,
         update_frequency: f32,
@@ -577,16 +601,19 @@ impl Session {
         } else {
             (1000f32 / update_frequency) as u32
         };
-        let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
-            "create-data-channel",
-            &[
-                &format!("reachy_audit_{}", id),
-                &gst::Structure::builder("config")
-                    .field("ordered", true)
-                    .field("max-packet-lifetime", max_packet_lifetime)
-                    .build(),
-            ],
-        );
+        let channel = webrtcbin
+            .upgrade()
+            .unwrap()
+            .emit_by_name::<WebRTCDataChannel>(
+                "create-data-channel",
+                &[
+                    &format!("reachy_audit_{}", id),
+                    &gst::Structure::builder("config")
+                        .field("ordered", true)
+                        .field("max-packet-lifetime", max_packet_lifetime)
+                        .build(),
+                ],
+            );
 
         thread::spawn(move || {
             let _ = rx_audit.recv();
@@ -609,7 +636,7 @@ impl Session {
 
     fn configure_state_channel(
         id: u32,
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         reachy: Option<ReachyId>,
         update_frequency: f32,
@@ -621,16 +648,19 @@ impl Session {
         } else {
             (1000f32 / update_frequency) as u32
         };
-        let channel = webrtcbin.lock().unwrap().emit_by_name::<WebRTCDataChannel>(
-            "create-data-channel",
-            &[
-                &format!("reachy_state_{}", id),
-                &gst::Structure::builder("config")
-                    .field("ordered", true)
-                    .field("max-packet-lifetime", max_packet_lifetime)
-                    .build(),
-            ],
-        );
+        let channel = webrtcbin
+            .upgrade()
+            .unwrap()
+            .emit_by_name::<WebRTCDataChannel>(
+                "create-data-channel",
+                &[
+                    &format!("reachy_state_{}", id),
+                    &gst::Structure::builder("config")
+                        .field("ordered", true)
+                        .field("max-packet-lifetime", max_packet_lifetime)
+                        .build(),
+                ],
+            );
 
         thread::spawn(move || {
             let _ = rx_state.recv();
@@ -651,7 +681,7 @@ impl Session {
         });
     }
 
-    fn create_webrtcbin(signaller: Arc<Mutex<Signallable>>, session_id: &String) -> gst::Element {
+    fn create_webrtcbin(signaller: WeakRef<Signallable>, session_id: &String) -> gst::Element {
         let webrtcbin = gst::ElementFactory::make("webrtcbin")
             .build()
             .expect("Failed to create webrtcbin");
@@ -664,12 +694,10 @@ impl Session {
                 session_id,
                 move |_webrtcbin: &gst::Element, sdp_m_line_index: u32, candidate: String| {
                     debug!("adding ice candidate {} {} ", sdp_m_line_index, candidate);
-                    signaller.lock().unwrap().add_ice(
-                        &session_id,
-                        &candidate,
-                        sdp_m_line_index,
-                        None,
-                    )
+                    signaller /*.lock()*/
+                        .upgrade()
+                        .unwrap()
+                        .add_ice(&session_id, &candidate, sdp_m_line_index, None)
                 }
             ),
         );
@@ -730,8 +758,8 @@ impl Session {
     }
 
     fn create_offer(
-        webrtcbin: Arc<Mutex<gst::Element>>,
-        signaller: Arc<Mutex<Signallable>>,
+        webrtcbin: WeakRef<gst::Element>,
+        signaller: WeakRef<Signallable>,
         session_id: String,
     ) {
         debug!("Creating offer for session");
@@ -761,24 +789,24 @@ impl Session {
             }
         }));
         webrtcbin
-            .lock()
+            .upgrade()
             .unwrap()
             .emit_by_name::<()>("create-offer", &[&None::<gst::Structure>, &promise]);
     }
 
     fn on_offer_created(
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         offer: gstwebrtc::WebRTCSessionDescription,
-        signaller_arc: Arc<Mutex<Signallable>>,
+        signaller: WeakRef<Signallable>,
         session_id: String,
     ) {
         debug!("Set local description");
         webrtcbin
-            .lock()
+            .upgrade()
             .unwrap()
             .emit_by_name::<()>("set-local-description", &[&offer, &None::<gst::Promise>]);
 
-        let signaller = signaller_arc.lock().unwrap();
+        let signaller = signaller.upgrade().unwrap(); //signaller_arc.lock().unwrap();
 
         let maybe_munged_offer = if signaller
             .has_property("manual-sdp-munging", Some(bool::static_type()))
@@ -797,8 +825,6 @@ impl Session {
         debug!("Set remote description");
 
         self.webrtcbin
-            .lock()
-            .unwrap()
             .emit_by_name::<()>("set-remote-description", &[desc, &None::<gst::Promise>]);
     }
 
@@ -819,8 +845,6 @@ impl Session {
         debug!("handle ice {} {}", sdp_m_line_index, candidate);
 
         self.webrtcbin
-            .lock()
-            .unwrap()
             .emit_by_name::<()>("add-ice-candidate", &[&sdp_m_line_index, &candidate]);
     }
 }

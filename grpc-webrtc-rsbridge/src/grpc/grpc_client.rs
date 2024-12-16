@@ -15,6 +15,7 @@ use reachy_api::reachy::ReachyStatus;
 use tokio::runtime::Runtime;
 use tonic::transport::Channel;
 
+use gst::glib::WeakRef;
 use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
 use reachy_api::bridge::{
@@ -34,7 +35,7 @@ pub struct GrpcClient {
     rt: Runtime, // see https://tokio.rs/tokio/topics/bridging
     stop_flag: Arc<AtomicBool>,
     aborting: Arc<AtomicBool>,
-    signaller: Arc<Mutex<Signallable>>,
+    signaller: WeakRef<Signallable>,
     session_id: String,
     tx_stop: std::sync::mpsc::Sender<bool>,
 }
@@ -42,7 +43,7 @@ pub struct GrpcClient {
 impl GrpcClient {
     pub fn new(
         address: String,
-        signaller: Option<Arc<Mutex<Signallable>>>,
+        signaller: WeakRef<Signallable>,
         session_id: Option<String>,
         tx_stop: Option<std::sync::mpsc::Sender<bool>>,
     ) -> Result<Self, tonic::transport::Error> {
@@ -77,7 +78,7 @@ impl GrpcClient {
             rt,
             stop_flag: Arc::new(AtomicBool::new(false)),
             aborting: Arc::new(AtomicBool::new(false)),
-            signaller: signaller.unwrap(),
+            signaller, //: signaller.unwrap(),
             session_id: session_id.unwrap(),
             tx_stop: tx_stop.unwrap(),
         })
@@ -93,7 +94,8 @@ impl GrpcClient {
             warn!("grpc connection lost. aborting session");
             self.tx_stop.send(true).unwrap();
             self.signaller
-            .lock()
+            //.lock()
+            .upgrade()
             .unwrap()
             .//emit_by_name::<bool>("session-ended", &[&self.session_id]);
         emit_by_name::<bool>("end-session", &[&self.session_id]);

@@ -1,4 +1,5 @@
 use gst::glib;
+use gst::glib::WeakRef;
 use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
 use gstrswebrtc::signaller::SignallableExt;
@@ -91,25 +92,28 @@ impl Simulator {
                 move |signaler: glib::Object,
                       session_id: &str,
                       session_description: &gstwebrtc::WebRTCSessionDescription| {
-                    let signaler_arc =
-                        Arc::new(Mutex::new(signaler.downcast::<Signallable>().unwrap()));
-                    let signaler_arc_clone = signaler_arc.clone();
+                    //let signaler_arc =
+                    //    Arc::new(Mutex::new(signaler.downcast::<Signallable>().unwrap()));
+                    //let signaler_arc_clone = signaler_arc.clone();
+                    let signaler_ref = signaler.downcast::<Signallable>().unwrap().downgrade();
+                    let webrtcbin_ref = webrtcbin.downgrade();
 
                     if session_description.type_() == gstwebrtc::WebRTCSDPType::Offer {
                         info!("Got offer for session {}", session_id);
+                        //let signaler_ref_clone = signaler_ref.clone();
                         Simulator::connect_webrtcbin_to_ice(
-                            webrtcbin.clone(),
-                            signaler_arc,
+                            webrtcbin_ref.clone(),
+                            signaler_ref.clone(),
                             session_id.to_string(),
                         );
 
-                        webrtcbin.lock().unwrap().emit_by_name::<()>(
+                        webrtcbin.emit_by_name::<()>(
                             "set-remote-description",
                             &[session_description, &None::<gst::Promise>],
                         );
                         Simulator::create_answer(
-                            webrtcbin.clone(),
-                            signaler_arc_clone,
+                            webrtcbin_ref,
+                            signaler_ref,
                             session_id.to_string(),
                         );
                     } else {
@@ -131,7 +135,7 @@ impl Simulator {
         peer_id: &String,
         reachy: Arc<Mutex<Option<Reachy>>>,
         main_loop: Arc<glib::MainLoop>,
-    ) -> (gst::Pipeline, Arc<Mutex<gst::Element>>) {
+    ) -> (gst::Pipeline, gst::Element) {
         let pipeline = gst::Pipeline::builder()
             .name(format!("session-pipeline-{peer_id}"))
             .build();
@@ -142,13 +146,14 @@ impl Simulator {
 
         pipeline.add(&webrtcbin).unwrap();
 
-        let webrtcbin_arc = Arc::new(Mutex::new(webrtcbin));
+        //let webrtcbin_arc = Arc::new(Mutex::new(webrtcbin));
+        let webrtcbin_ref = webrtcbin.downgrade();
 
         let ret = pipeline.set_state(gst::State::Playing);
         match ret {
             Ok(gst::StateChangeSuccess::Success) | Ok(gst::StateChangeSuccess::Async) => {
                 // Pipeline state changed successfully
-                Simulator::configure_data_channels(webrtcbin_arc.clone(), reachy, main_loop);
+                Simulator::configure_data_channels(webrtcbin_ref, reachy, main_loop);
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
                 error!("Failed to transition pipeline to PLAYING: No preroll data available");
@@ -157,15 +162,15 @@ impl Simulator {
                 error!("Failed to transition pipeline to PLAYING: {:?}", err);
             }
         }
-        (pipeline, webrtcbin_arc)
+        (pipeline, webrtcbin)
     }
 
     fn configure_data_channels(
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         reachy: Arc<Mutex<Option<Reachy>>>,
         main_loop: Arc<glib::MainLoop>,
     ) {
-        webrtcbin.lock().unwrap().connect_closure(
+        webrtcbin.upgrade().unwrap().connect_closure(
             "on-data-channel",
             false,
             glib::closure!(
@@ -442,11 +447,12 @@ impl Simulator {
     }
 
     fn connect_webrtcbin_to_ice(
-        webrtcbin: Arc<Mutex<gst::Element>>,
-        signaller: Arc<Mutex<Signallable>>,
+        webrtcbin: WeakRef<gst::Element>,
+        signaller: WeakRef<Signallable>,
         session_id: String,
     ) {
-        webrtcbin.lock().unwrap().connect_closure(
+        let webrtcbin = webrtcbin.upgrade().unwrap();
+        webrtcbin.connect_closure(
             "on-ice-candidate",
             false,
             glib::closure!(
@@ -454,7 +460,7 @@ impl Simulator {
                 session_id,
                 move |_webrtcbin: &gst::Element, sdp_m_line_index: u32, candidate: String| {
                     debug!("adding ice candidate {} {} ", sdp_m_line_index, candidate);
-                    signaller.lock().unwrap().add_ice(
+                    signaller.upgrade().unwrap().add_ice(
                         &session_id,
                         &candidate,
                         sdp_m_line_index,
@@ -464,7 +470,7 @@ impl Simulator {
             ),
         );
 
-        webrtcbin.lock().unwrap().connect_notify(
+        webrtcbin.connect_notify(
             Some("connection-state"),
             glib::clone!(
                 #[strong]
@@ -488,7 +494,7 @@ impl Simulator {
             ),
         );
 
-        webrtcbin.lock().unwrap().connect_notify(
+        webrtcbin.connect_notify(
             Some("ice-connection-state"),
             glib::clone!(
                 #[strong]
@@ -518,8 +524,8 @@ impl Simulator {
     }
 
     fn create_answer(
-        webrtcbin: Arc<Mutex<gst::Element>>,
-        signaller: Arc<Mutex<Signallable>>,
+        webrtcbin: WeakRef<gst::Element>,
+        signaller: WeakRef<Signallable>,
         session_id: String,
     ) {
         debug!("Creating answer for session");
@@ -549,24 +555,24 @@ impl Simulator {
             }
         }));
         webrtcbin
-            .lock()
+            .upgrade()
             .unwrap()
             .emit_by_name::<()>("create-answer", &[&None::<gst::Structure>, &promise]);
     }
 
     fn on_answer_created(
-        webrtcbin: Arc<Mutex<gst::Element>>,
+        webrtcbin: WeakRef<gst::Element>,
         answer: gstwebrtc::WebRTCSessionDescription,
-        signaller_arc: Arc<Mutex<Signallable>>,
+        signaller_ref: WeakRef<Signallable>,
         session_id: String,
     ) {
         debug!("Set local description");
         webrtcbin
-            .lock()
+            .upgrade()
             .unwrap()
             .emit_by_name::<()>("set-local-description", &[&answer, &None::<gst::Promise>]);
 
-        let signaller = signaller_arc.lock().unwrap();
+        let signaller = signaller_ref.upgrade().unwrap();
 
         let maybe_munged_answer = if signaller
             .has_property("manual-sdp-munging", Some(bool::static_type()))
