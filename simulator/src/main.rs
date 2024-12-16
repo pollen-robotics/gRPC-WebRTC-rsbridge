@@ -72,7 +72,7 @@ fn main() {
             }
         });
 
-        let simulator = simulator::Simulator::new(uri, peer_id, rx_stop_signal);
+        let simulator = simulator::Simulator::new(uri, peer_id, rx_stop_signal, args.frequency);
         simulator.run();
     }
 

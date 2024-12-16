@@ -140,13 +140,10 @@ impl WebRTCBridge {
                         warn!("Discarding received offer");
                     }
 
-                    //let signaler_arc =
-                    //    Arc::new(Mutex::new(signaler.downcast::<Signallable>().unwrap()));
                     let signaler_ref = signaler.downcast::<Signallable>().unwrap().downgrade();
 
                     match Session::new(
                         peer_id.to_string(),
-                        //signaler_arc.clone(),
                         signaler_ref.clone(),
                         session_id.to_string(),
                         grpc_address.clone(),
@@ -157,10 +154,6 @@ impl WebRTCBridge {
                             .unwrap()
                             .insert(session_id.to_string(), session),
                         Err(e) => {
-                            /*signaler_arc
-                            .lock()
-                            .unwrap()
-                            .emit_by_name::<bool>("end-session", &[&session_id]);*/
                             signaler_ref
                                 .upgrade()
                                 .unwrap()

@@ -27,7 +27,6 @@ use crate::webrtc::stats::Stats;
 pub struct Session {
     peer_id: String,
     pipeline: gst::Pipeline,
-    //webrtcbin: Arc<Mutex<gst::Element>>,
     webrtcbin: gst::Element,
     tx_stop_thread: std::sync::mpsc::Sender<bool>,
     running: Arc<AtomicBool>,
@@ -36,7 +35,6 @@ pub struct Session {
 impl Session {
     pub fn new(
         peer_id: String,
-        //signaller: Arc<Mutex<Signallable>>,
         signaller: WeakRef<Signallable>,
         session_id: String,
         grpc_address: String,
@@ -123,7 +121,6 @@ impl Session {
 
         pipeline.add(&webrtcbin).unwrap();
 
-        //let webrtcbin_arc = Arc::new(Mutex::new(webrtcbin));
         let webrtcbin_ref = webrtcbin.downgrade();
 
         let ret = pipeline.set_state(gst::State::Playing);
@@ -133,7 +130,7 @@ impl Session {
                 Session::create_data_channels(webrtcbin_ref.clone(), grpc_client, running);
                 info!("data channel");
                 Session::create_offer(webrtcbin_ref.clone(), signaller, session_id);
-                Session::setup_stats(webrtcbin_ref);
+                //Session::setup_stats(webrtcbin_ref);
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
                 error!("Failed to transition pipeline to PLAYING: No preroll data available");
@@ -206,7 +203,6 @@ impl Session {
     }
 
     fn create_data_channels(
-        //webrtcbin: Arc<Mutex<gst::Element>>,
         webrtcbin: WeakRef<gst::Element>,
         grpc_client: Arc<Mutex<GrpcClient>>,
         running: Arc<AtomicBool>,
@@ -500,36 +496,6 @@ impl Session {
 
         thread::spawn(move || {
             while running.load(Ordering::Relaxed) {
-                /*if let Some(commands) = queue_commands_clone.lock().unwrap().pop_front() {
-                    /*let mut grpc_client_lock = grpc_client.try_lock();
-                    if let Ok(ref mut client) = grpc_client_lock {
-                        if client.handle_commands(commands).is_err() {
-                            running.store(false, Ordering::Relaxed);
-                            break;
-                        } else {
-                            let counter = command_counter.load(Ordering::Relaxed) + 1;
-                            command_counter.store(counter, Ordering::Relaxed);
-                        }
-                    } else {
-                        // warn!("Dropping lossing command");
-                        let counter = drop_counter.load(Ordering::Relaxed) + 1;
-                        drop_counter.store(counter, Ordering::Relaxed);
-                    }*/
-                    //debug!("read");
-                    if grpc_client
-                        .lock()
-                        .unwrap()
-                        .handle_commands(commands)
-                        .is_err()
-                    {
-                        running.store(false, Ordering::Relaxed);
-                        break;
-                    };
-                } else {
-                    //debug!("sleep");
-                    //expect freq 120Hz -> 8ms. ToDo get timestamp from commands
-                    std::thread::sleep(Duration::from_millis(1));
-                }*/
                 let mut queue_commands_lock = queue_commands_clone.try_lock();
                 if let Ok(ref mut queue) = queue_commands_lock {
                     if let Some(commands) = queue.pop_front() {
@@ -556,7 +522,7 @@ impl Session {
                 let mut queue_commands_lock = queue_commands.try_lock(); //.push_back(commands);
                 if let Ok(ref mut queue) = queue_commands_lock {
                     queue.push_back(commands);
-                    //debug!("push");
+
                     let counter = command_counter.load(Ordering::Relaxed) + 1;
                     command_counter.store(counter, Ordering::Relaxed);
                 } else {
@@ -565,22 +531,6 @@ impl Session {
                 }
                 drop(queue_commands_lock);
                 std::thread::sleep(Duration::from_millis(1));
-                /*let mut grpc_client_lock = grpc_client.try_lock();
-                if let Ok(ref mut client) = grpc_client_lock {
-                    if client.handle_commands(commands).is_err() {
-                        running.store(false, Ordering::Relaxed);
-                        break;
-                    } else {
-                        let counter = command_counter.load(Ordering::Relaxed) + 1;
-                        command_counter.store(counter, Ordering::Relaxed);
-                    }
-                } else {
-                    // warn!("Dropping lossing command");
-                    let counter = drop_counter.load(Ordering::Relaxed) + 1;
-                    drop_counter.store(counter, Ordering::Relaxed);
-                }*/
-
-                //Todo add in a buffer
             }
             running_clone.store(false, Ordering::Relaxed);
             debug!("exit stream lossy command channel");

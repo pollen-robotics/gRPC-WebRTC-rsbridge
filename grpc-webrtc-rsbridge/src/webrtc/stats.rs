@@ -61,6 +61,7 @@ impl Stats {
                     Stats::process_stats(ws, tx_stats);
                     let stats = rx_stats.recv().unwrap();
                     //let stats = ws.property::<gst::Structure>("stats");
+                    //debug!("Stats: {:?}", stats);
                     let stats = Stats::serialize_value(&stats.to_value()).unwrap();
                     debug!("Stats: {}", serde_json::to_string_pretty(&stats).unwrap());
                     let msg = WsMessage::Text(serde_json::to_string(&stats).unwrap());

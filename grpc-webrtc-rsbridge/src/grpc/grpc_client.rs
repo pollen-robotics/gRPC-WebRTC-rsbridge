@@ -23,7 +23,7 @@ use reachy_api::bridge::{
 };
 use reachy_api::reachy::ReachyId;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub struct GrpcClient {
     reachy_stub: ReachyServiceClient<Channel>,
@@ -78,7 +78,7 @@ impl GrpcClient {
             rt,
             stop_flag: Arc::new(AtomicBool::new(false)),
             aborting: Arc::new(AtomicBool::new(false)),
-            signaller, //: signaller.unwrap(),
+            signaller,
             session_id: session_id.unwrap(),
             tx_stop: tx_stop.unwrap(),
         })

@@ -31,6 +31,7 @@ impl Simulator {
         uri: String,
         peer_id: String,
         rx_stop_signal: std::sync::mpsc::Receiver<bool>,
+        frequency: u16,
     ) -> Self {
         let main_loop = Arc::new(glib::MainLoop::new(None, false));
         let main_loop_clone = main_loop.clone();
@@ -46,7 +47,7 @@ impl Simulator {
 
         let _reachy: Arc<Mutex<Option<Reachy>>> = Arc::new(Mutex::new(None));
         let (pipeline, webrtcbin) =
-            Simulator::setup_webrtc(&peer_id, _reachy.clone(), main_loop.clone());
+            Simulator::setup_webrtc(&peer_id, _reachy.clone(), main_loop.clone(), frequency);
 
         signaller.connect_closure(
             "error",
@@ -135,6 +136,7 @@ impl Simulator {
         peer_id: &String,
         reachy: Arc<Mutex<Option<Reachy>>>,
         main_loop: Arc<glib::MainLoop>,
+        frequency: u16,
     ) -> (gst::Pipeline, gst::Element) {
         let pipeline = gst::Pipeline::builder()
             .name(format!("session-pipeline-{peer_id}"))
@@ -153,7 +155,7 @@ impl Simulator {
         match ret {
             Ok(gst::StateChangeSuccess::Success) | Ok(gst::StateChangeSuccess::Async) => {
                 // Pipeline state changed successfully
-                Simulator::configure_data_channels(webrtcbin_ref, reachy, main_loop);
+                Simulator::configure_data_channels(webrtcbin_ref, reachy, main_loop, frequency);
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
                 error!("Failed to transition pipeline to PLAYING: No preroll data available");
@@ -169,6 +171,7 @@ impl Simulator {
         webrtcbin: WeakRef<gst::Element>,
         reachy: Arc<Mutex<Option<Reachy>>>,
         main_loop: Arc<glib::MainLoop>,
+        frequency: u16,
     ) {
         webrtcbin.upgrade().unwrap().connect_closure(
             "on-data-channel",
@@ -193,7 +196,7 @@ impl Simulator {
                         Simulator::configure_reachy_audit_channel(channel);
                     } else if label.starts_with("reachy_command_lossy") {
                         debug!("Received reachy command lossy data channel");
-                        Simulator::send_commands(channel.clone(), reachy, main_loop);
+                        Simulator::send_commands(channel.clone(), reachy, main_loop, frequency);
                     } else if label.starts_with("reachy_command_reliable") {
                         debug!("Received reachy command reliable data channel");
                         Simulator::turn_on_arms(channel, reachy);
@@ -209,13 +212,14 @@ impl Simulator {
         channel: WebRTCDataChannel,
         reachy: Arc<Mutex<Option<Reachy>>>,
         main_loop: Arc<glib::MainLoop>,
+        frequency: u16,
     ) {
         let radius = 0.2f64; //Circle radius
         let fixed_x = 0.4f64; // Fixed x-coordinate
         let center_y = 0f64;
         let center_z = 0.1f64; // Center of the circle in y-z plane
-        let frequency = 100; //Update frequency in Hz
-        let sample_duration = Duration::from_millis(1000 / frequency);
+                               //let frequency = 100; //Update frequency in Hz
+        let sample_duration = Duration::from_millis(1000 / frequency as u64);
         let circle_period = 3f64;
         let t0 = Instant::now();
 
