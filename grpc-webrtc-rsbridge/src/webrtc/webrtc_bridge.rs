@@ -47,9 +47,7 @@ impl WebRTCBridge {
             "request-meta",
             false,
             glib::closure!(move |_signaler: glib::Object| -> Option<gst::Structure> {
-                let meta_structure =
-                    Some(gst::Structure::builder("meta").field("name", &name).build());
-                meta_structure
+                Some(gst::Structure::builder("meta").field("name", &name).build())
             }),
         );
 

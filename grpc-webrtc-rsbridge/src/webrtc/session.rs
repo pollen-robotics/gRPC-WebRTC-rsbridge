@@ -22,7 +22,7 @@ use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::webrtc::stats::Stats;
+//use crate::webrtc::stats::Stats;
 
 pub struct Session {
     peer_id: String,
@@ -83,7 +83,7 @@ impl Session {
         let tx_stop_thread_clone = tx_stop_thread.clone();
         //grpc client uses the tonic async lib that can't run in the glib:closure where this Session is created
         thread::spawn(move || {
-            let _grpc_client_result = match GrpcClient::new(
+            match GrpcClient::new(
                 grpc_address,
                 signaller,
                 Some(session_id),
@@ -142,12 +142,12 @@ impl Session {
         (pipeline, webrtcbin)
     }
 
-    fn setup_stats(webrtcbin: WeakRef<gst::Element>) {
+    /*fn setup_stats(webrtcbin: WeakRef<gst::Element>) {
         thread::spawn(move || {
             let stats = Stats::new(webrtcbin);
             stats.run();
         });
-    }
+    }*/
 
     fn setup_bus_watch(pipeline: &gst::Pipeline, main_loop: Arc<glib::MainLoop>) {
         let bus = pipeline.bus().unwrap();
@@ -177,7 +177,7 @@ impl Session {
     }
 
     pub fn is_running(&self) -> bool {
-        return self.running.load(Ordering::Relaxed);
+        self.running.load(Ordering::Relaxed)
     }
 
     fn stop(&self) {
@@ -631,7 +631,7 @@ impl Session {
         });
     }
 
-    fn create_webrtcbin(signaller: WeakRef<Signallable>, session_id: &String) -> gst::Element {
+    fn create_webrtcbin(signaller: WeakRef<Signallable>, session_id: &str) -> gst::Element {
         let webrtcbin = gst::ElementFactory::make("webrtcbin")
             .build()
             .expect("Failed to create webrtcbin");
@@ -640,7 +640,7 @@ impl Session {
             "on-ice-candidate",
             false,
             glib::closure!(
-                #[strong]
+                #[to_owned]
                 session_id,
                 move |_webrtcbin: &gst::Element, sdp_m_line_index: u32, candidate: String| {
                     debug!("adding ice candidate {} {} ", sdp_m_line_index, candidate);
@@ -655,7 +655,7 @@ impl Session {
         webrtcbin.connect_notify(
             Some("connection-state"),
             glib::clone!(
-                #[strong]
+                #[to_owned]
                 session_id,
                 move |webrtcbin, _pspec| {
                     let state = webrtcbin
@@ -679,7 +679,7 @@ impl Session {
         webrtcbin.connect_notify(
             Some("ice-connection-state"),
             glib::clone!(
-                #[strong]
+                #[to_owned]
                 session_id,
                 move |webrtcbin, _pspec| {
                     let state = webrtcbin

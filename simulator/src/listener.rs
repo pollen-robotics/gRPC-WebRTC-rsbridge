@@ -16,7 +16,7 @@ impl Listener {
         let (tx_peer_id, rx_peer_id) = channel::<Option<String>>();
         let tx_peer_id_clone = tx_peer_id.clone();
         let signaller = Signaller::new(WebRTCSignallerRole::Listener);
-        signaller.set_property("uri", &uri);
+        signaller.set_property("uri", uri);
         signaller.connect("producer-added", false, move |args| {
             let meta_structure = args[2].get::<gst::Structure>();
             match meta_structure {

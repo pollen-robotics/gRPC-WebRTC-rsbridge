@@ -15,22 +15,26 @@ use tokio::runtime::Runtime;
 use tokio::task;
 use tokio::time;
 
+#[allow(dead_code)]
 #[derive(Clone)]
 struct Listener {
     id: uuid::Uuid,
     sender: mpsc::Sender<WsMessage>,
 }
 
+#[allow(dead_code)]
 struct State {
     listeners: Vec<Listener>,
 }
 
+#[allow(dead_code)]
 pub struct Stats {
     rt: Runtime, // see https://tokio.rs/tokio/topics/bridging
     state: Arc<Mutex<State>>,
     listener: TcpListener,
 }
 
+#[allow(dead_code)]
 impl Stats {
     pub fn new(webrtcbin: WeakRef<gst::Element>) -> Self {
         let state = Arc::new(Mutex::new(State { listeners: vec![] }));
