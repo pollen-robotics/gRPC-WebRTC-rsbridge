@@ -1,5 +1,8 @@
 use log::{debug, error, trace, warn};
 
+use reachy_api::component::dynamixel_motor::dynamixel_motor_service_client::DynamixelMotorServiceClient;
+use reachy_api::component::dynamixel_motor::{DynamixelMotorCommand, DynamixelMotorsCommand};
+use reachy_api::component::ComponentId;
 use reachy_api::reachy::part::arm::arm_service_client::ArmServiceClient;
 use reachy_api::reachy::part::hand::hand_service_client::HandServiceClient;
 use reachy_api::reachy::part::head::head_service_client::HeadServiceClient;
@@ -32,6 +35,7 @@ pub struct GrpcClient {
     hand_stub: HandServiceClient<Channel>,
     mobilebase_mobility_stub: MobileBaseMobilityServiceClient<Channel>,
     mobilebase_utility_stub: MobileBaseUtilityServiceClient<Channel>,
+    dxl_motor_sub: DynamixelMotorServiceClient<Channel>,
     rt: Runtime, // see https://tokio.rs/tokio/topics/bridging
     stop_flag: Arc<AtomicBool>,
     aborting: Arc<AtomicBool>,
@@ -66,7 +70,9 @@ impl GrpcClient {
             rt.block_on(MobileBaseMobilityServiceClient::connect(address.clone()))?;
 
         let mobilebase_utility_stub =
-            rt.block_on(MobileBaseUtilityServiceClient::connect(address))?;
+            rt.block_on(MobileBaseUtilityServiceClient::connect(address.clone()))?;
+
+        let dxl_motor_sub = rt.block_on(DynamixelMotorServiceClient::connect(address))?;
 
         Ok(Self {
             reachy_stub,
@@ -75,6 +81,7 @@ impl GrpcClient {
             hand_stub,
             mobilebase_mobility_stub,
             mobilebase_utility_stub,
+            dxl_motor_sub,
             rt,
             stop_flag: Arc::new(AtomicBool::new(false)),
             aborting: Arc::new(AtomicBool::new(false)),
@@ -225,9 +232,41 @@ impl GrpcClient {
                         return Err("Connection lost".into());
                     }
                 }
+                Some(any_command::Command::AntennasCommand(antenna_cmd)) => {
+                    if self.handle_antennas_cmd(antenna_cmd).is_err() {
+                        self.lost_connection();
+                        return Err("Connection lost".into());
+                    }
+                }
                 _ => warn!("Unknown command: {:?}", cmd),
             }
         }
+        Ok(())
+    }
+
+    fn set_compliancy_antennas(&mut self, compliant: bool) -> Result<(), tonic::Status> {
+        let antenna_right_cmd = DynamixelMotorCommand {
+            id: Some(ComponentId {
+                id: 0,
+                name: "antenna_right".to_string(),
+            }),
+            compliant: Some(compliant),
+            ..Default::default()
+        };
+
+        let antenna_left_cmd = DynamixelMotorCommand {
+            id: Some(ComponentId {
+                id: 0,
+                name: "antenna_left".to_string(),
+            }),
+            compliant: Some(compliant),
+            ..Default::default()
+        };
+
+        let antennas_cmd = DynamixelMotorsCommand {
+            cmd: vec![antenna_left_cmd, antenna_right_cmd],
+        };
+        self.handle_antennas_cmd(antennas_cmd)?;
         Ok(())
     }
 
@@ -241,9 +280,11 @@ impl GrpcClient {
         } else if let Some(turn_on) = cmd.turn_on {
             trace!("arm_turn_on");
             self.rt.block_on(self.arm_stub.turn_on(turn_on))?;
+            self.set_compliancy_antennas(false)?;
         } else if let Some(turn_off) = cmd.turn_off {
             trace!("arm_turn_off");
             self.rt.block_on(self.arm_stub.turn_off(turn_off))?;
+            self.set_compliancy_antennas(true)?;
         } else if let Some(speed_limit) = cmd.speed_limit {
             trace!("arm_speed_limit");
             self.rt
@@ -319,6 +360,27 @@ impl GrpcClient {
         } else {
             warn!("Unknown mobile base command: {:?}", cmd);
         }
+        Ok(())
+    }
+
+    fn handle_antennas_cmd(&mut self, cmd: DynamixelMotorsCommand) -> Result<(), tonic::Status> {
+        trace!("Handling antennas command: {:?}", cmd);
+
+        self.rt.block_on(self.dxl_motor_sub.send_command(cmd))?;
+
+        /*if let Some(antennas_goal) = cmd.antennas_goal {
+            trace!("antennas_goal");
+            self.rt
+                .block_on(self.head_stub.set_antennas_position(antennas_goal))?;
+        } else if let Some(turn_on) = cmd.turn_on {
+            trace!("antennas_turn_on");
+            self.rt.block_on(self.head_stub.turn_on(turn_on))?;
+        } else if let Some(turn_off) = cmd.turn_off {
+            trace!("antennas_turn_off");
+            self.rt.block_on(self.head_stub.turn_off(turn_off))?;
+        } else {
+            warn!("Unknown antennas command: {:?}", cmd);
+        }*/
         Ok(())
     }
 }
