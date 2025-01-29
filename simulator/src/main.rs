@@ -1,6 +1,6 @@
 //use crate::simulator::Simulator;
 use clap::Parser;
-use log::{debug, info};
+use log::{debug, info, warn};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::sync::mpsc::channel;
 use std::thread;
@@ -74,6 +74,8 @@ fn main() {
 
         let simulator = simulator::Simulator::new(uri, peer_id, rx_stop_signal, args.frequency);
         simulator.run();
+    } else {
+        warn!("No peer id found!");
     }
 
     unsafe { gst::deinit() };

@@ -3,8 +3,10 @@ use gst::prelude::*;
 use gstrswebrtc::signaller::SignallableExt;
 use gstrswebrtc::signaller::Signaller;
 use gstrswebrtc::signaller::WebRTCSignallerRole;
-use log::{error, info};
+use log::{debug, error, info};
 use std::sync::mpsc::channel;
+use std::thread;
+use std::time::Duration;
 
 pub struct Listener {
     signaller: Signaller,
@@ -68,8 +70,10 @@ impl Listener {
         self.signaller.start();
         info!("Listener started");
         let peer_id = self.rx_peer_id.recv().unwrap();
-        info!("Listener stopped");
+        // hack: artifical sleep to avoid stop to hang sometimes
+        thread::sleep(Duration::from_millis(200));
         self.signaller.stop();
+        debug!("Listener stopped");
         peer_id
     }
 }

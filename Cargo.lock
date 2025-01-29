@@ -746,7 +746,7 @@ dependencies = [
  "libc",
  "memchr",
  "smallvec",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -875,9 +875,9 @@ dependencies = [
 
 [[package]]
 name = "gst-plugin-webrtc"
-version = "0.13.3"
+version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e087aae3167a777cf8e8222afd96341b28e08e0e0b673fbcde9a4696be3d0ad3"
+checksum = "5a1d9d2cdcd92e08d4c0ff14aedebb9cc55dab1de9249e2274581f05370190e6"
 dependencies = [
  "anyhow",
  "async-tungstenite",
@@ -902,7 +902,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-native-tls",
  "tokio-stream",
@@ -922,9 +922,9 @@ dependencies = [
 
 [[package]]
 name = "gstreamer"
-version = "0.23.3"
+version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "680006694e79692f831ca4f3ba6e147b8c23db289b2df1d33a4a97fd038145d7"
+checksum = "700cb1b2e86dda424f85eb728102a111602317e40b4dd71cf1c0dc04e0cc5d95"
 dependencies = [
  "cfg-if",
  "futures-channel",
@@ -944,7 +944,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "smallvec",
- "thiserror",
+ "thiserror 2.0.11",
 ]
 
 [[package]]
@@ -1128,7 +1128,7 @@ dependencies = [
  "gstreamer-app",
  "gstreamer-video",
  "once_cell",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1146,7 +1146,7 @@ dependencies = [
  "libc",
  "once_cell",
  "serde",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1165,9 +1165,9 @@ dependencies = [
 
 [[package]]
 name = "gstreamer-webrtc"
-version = "0.23.2"
+version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a43183c11ab5a3209d8432966a88ef7d7fb37ae7ef4b6a8f000762ad6b912193"
+checksum = "52d33260b32eec83ceeb10bf096584b728d126d9ccdfc3a1e14ccebfad9964ff"
 dependencies = [
  "glib 0.20.6",
  "gstreamer",
@@ -2384,7 +2384,16 @@ version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d452f284b73e6d76dd36758a0c8684b1d5be31f92b89d07fd5822175732206fc"
+dependencies = [
+ "thiserror-impl 2.0.11",
 ]
 
 [[package]]
@@ -2392,6 +2401,17 @@ name = "thiserror-impl"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26afc1baea8a989337eeb52b6e72a039780ce45c3edfcc9c5b9d112feeb173c2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2645,7 +2665,7 @@ dependencies = [
  "native-tls",
  "rand",
  "sha1",
- "thiserror",
+ "thiserror 1.0.69",
  "url",
  "utf-8",
 ]
