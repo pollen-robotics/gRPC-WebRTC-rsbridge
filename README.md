@@ -15,8 +15,9 @@ RUST_LOG=debug cargo run --bin grpc-webrtc-rsbridge
 
 ### Client
 
-The client sends messages to move both Reachy's arms.
+The client sends messages to move both Reachy's arms. Optional arguments are `--frequency`, to
+ set the base uploading frequency, and `--bench_mode` to increase the frequency until 1500Hz.
 
 ```bash
-RUST_LOG=debug cargo run --bin simulator
+RUST_LOG=debug cargo run --bin simulator -- --frequency 100 --bench_mode
 ```

@@ -72,7 +72,13 @@ fn main() {
             }
         });
 
-        let simulator = simulator::Simulator::new(uri, peer_id, rx_stop_signal, args.frequency);
+        let simulator = simulator::Simulator::new(
+            uri,
+            peer_id,
+            rx_stop_signal,
+            args.frequency,
+            args.bench_mode,
+        );
         simulator.run();
     } else {
         warn!("No peer id found!");

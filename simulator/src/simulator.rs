@@ -1,3 +1,4 @@
+use ::glib::property::PropertyGet;
 use gst::glib;
 use gst::glib::WeakRef;
 use gst::prelude::*;
@@ -6,7 +7,7 @@ use gstrswebrtc::signaller::SignallableExt;
 use gstrswebrtc::signaller::Signaller;
 use gstrswebrtc::signaller::WebRTCSignallerRole;
 use gstwebrtc::WebRTCDataChannel;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use prost::Message;
 use reachy_api::bridge::any_command::Command::ArmCommand;
 use reachy_api::bridge::service_response::Response;
@@ -15,6 +16,7 @@ use reachy_api::bridge::{AnyCommand, AnyCommands};
 use reachy_api::reachy::kinematics::Matrix4x4;
 use reachy_api::reachy::part::arm::ArmCartesianGoal;
 use reachy_api::reachy::{Reachy, ReachyState, ReachyStatus};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
@@ -32,6 +34,7 @@ impl Simulator {
         peer_id: String,
         rx_stop_signal: std::sync::mpsc::Receiver<bool>,
         frequency: u16,
+        bench_mode: bool,
     ) -> Self {
         let main_loop = Arc::new(glib::MainLoop::new(None, false));
         let main_loop_clone = main_loop.clone();
@@ -46,8 +49,13 @@ impl Simulator {
         signaller.set_property("producer-peer-id", &peer_id);
 
         let _reachy: Arc<Mutex<Option<Reachy>>> = Arc::new(Mutex::new(None));
-        let (pipeline, webrtcbin) =
-            Simulator::setup_webrtc(&peer_id, _reachy.clone(), main_loop.clone(), frequency);
+        let (pipeline, webrtcbin) = Simulator::setup_webrtc(
+            &peer_id,
+            _reachy.clone(),
+            main_loop.clone(),
+            frequency,
+            bench_mode,
+        );
 
         signaller.connect_closure(
             "error",
@@ -137,6 +145,7 @@ impl Simulator {
         reachy: Arc<Mutex<Option<Reachy>>>,
         main_loop: Arc<glib::MainLoop>,
         frequency: u16,
+        bench_mode: bool,
     ) -> (gst::Pipeline, gst::Element) {
         let pipeline = gst::Pipeline::builder()
             .name(format!("session-pipeline-{peer_id}"))
@@ -155,7 +164,13 @@ impl Simulator {
         match ret {
             Ok(gst::StateChangeSuccess::Success) | Ok(gst::StateChangeSuccess::Async) => {
                 // Pipeline state changed successfully
-                Simulator::configure_data_channels(webrtcbin_ref, reachy, main_loop, frequency);
+                Simulator::configure_data_channels(
+                    webrtcbin_ref,
+                    reachy,
+                    main_loop,
+                    frequency,
+                    bench_mode,
+                );
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
                 error!("Failed to transition pipeline to PLAYING: No preroll data available");
@@ -172,6 +187,7 @@ impl Simulator {
         reachy: Arc<Mutex<Option<Reachy>>>,
         main_loop: Arc<glib::MainLoop>,
         frequency: u16,
+        bench_mode: bool,
     ) {
         webrtcbin.upgrade().unwrap().connect_closure(
             "on-data-channel",
@@ -196,7 +212,13 @@ impl Simulator {
                         Simulator::configure_reachy_audit_channel(channel);
                     } else if label.starts_with("reachy_command_lossy") {
                         debug!("Received reachy command lossy data channel");
-                        Simulator::send_commands(channel.clone(), reachy, main_loop, frequency);
+                        Simulator::send_commands(
+                            channel.clone(),
+                            reachy,
+                            main_loop,
+                            frequency,
+                            bench_mode,
+                        );
                     } else if label.starts_with("reachy_command_reliable") {
                         debug!("Received reachy command reliable data channel");
                         Simulator::turn_on_arms(channel, reachy);
@@ -213,15 +235,36 @@ impl Simulator {
         reachy: Arc<Mutex<Option<Reachy>>>,
         main_loop: Arc<glib::MainLoop>,
         frequency: u16,
+        bench_mode: bool,
     ) {
         let radius = 0.2f64; //Circle radius
         let fixed_x = 0.4f64; // Fixed x-coordinate
         let center_y = 0f64;
         let center_z = 0.1f64; // Center of the circle in y-z plane
-                               //let frequency = 100; //Update frequency in Hz
-        let sample_duration = Duration::from_millis(1000 / frequency as u64);
+                               //let mut frequency = frequency as u64; //Update frequency in Hz
+        let frequency = Arc::new(AtomicU64::new(frequency as u64));
+        let frequency_clone = frequency.clone();
+        //let mut sample_duration = Duration::from_millis(1000 / frequency);
         let circle_period = 3f64;
         let t0 = Instant::now();
+
+        let main_loop_clone = main_loop.clone();
+        if bench_mode {
+            std::thread::spawn(move || {
+                while main_loop_clone.is_running() {
+                    std::thread::sleep(Duration::from_millis(50));
+
+                    let mut frequency_local = frequency_clone.load(Ordering::Relaxed);
+                    frequency_local += 1;
+                    //debug!("frequency: {}", frequency_local);
+                    if frequency_local > 1500 {
+                        main_loop_clone.quit();
+                    } else {
+                        frequency_clone.store(frequency_local, Ordering::Relaxed);
+                    }
+                }
+            });
+        }
 
         std::thread::spawn(move || {
             while main_loop.is_running() {
@@ -315,7 +358,18 @@ impl Simulator {
                 };
                 let data = glib::Bytes::from_owned(commands.encode_to_vec());
                 channel.send_data(Some(&data));
+                let sample_duration =
+                    Duration::from_millis(1000 / frequency.load(Ordering::Relaxed));
                 std::thread::sleep(sample_duration);
+                /*if bench_mode {
+                    //sample_duration += Duration::from_millis(100);
+                    frequency += 1;
+                    sample_duration = Duration::from_millis(1000 / frequency);
+                    //debug!("duration millis: {}", sample_duration.as_millis());
+                    if frequency > 1500 {
+                        main_loop.quit();
+                    }
+                }*/
             }
         });
     }
@@ -377,7 +431,7 @@ impl Simulator {
                 }
             };
 
-            debug!("Received state: {:?}", state);
+            trace!("Received state: {:?}", state);
         });
     }
 
@@ -395,7 +449,7 @@ impl Simulator {
                 }
             };
 
-            debug!("Received status: {:?}", status);
+            trace!("Received status: {:?}", status);
         });
     }
 

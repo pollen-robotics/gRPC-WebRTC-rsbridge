@@ -1,5 +1,6 @@
 use log::{debug, error, trace, warn};
 
+use gst::prelude::*;
 use reachy_api::component::dynamixel_motor::dynamixel_motor_service_client::DynamixelMotorServiceClient;
 use reachy_api::component::dynamixel_motor::{DynamixelMotorCommand, DynamixelMotorsCommand};
 use reachy_api::component::ComponentId;
@@ -10,16 +11,14 @@ use reachy_api::reachy::part::mobile::base::mobility::mobile_base_mobility_servi
 use reachy_api::reachy::part::mobile::base::utility::mobile_base_utility_service_client::MobileBaseUtilityServiceClient;
 use reachy_api::reachy::reachy_service_client::ReachyServiceClient;
 use reachy_api::reachy::Reachy;
-use reachy_api::reachy::ReachyStreamAuditRequest;
-use reachy_api::reachy::ReachyStreamStateRequest;
-
 use reachy_api::reachy::ReachyState;
 use reachy_api::reachy::ReachyStatus;
+use reachy_api::reachy::ReachyStreamAuditRequest;
+use reachy_api::reachy::ReachyStreamStateRequest;
 use tokio::runtime::Runtime;
 use tonic::transport::Channel;
 
 use gst::glib::WeakRef;
-use gst::prelude::*;
 use gstrswebrtc::signaller::Signallable;
 use reachy_api::bridge::{
     any_command, AnyCommands, ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
@@ -39,7 +38,7 @@ pub struct GrpcClient {
     rt: Runtime, // see https://tokio.rs/tokio/topics/bridging
     stop_flag: Arc<AtomicBool>,
     aborting: Arc<AtomicBool>,
-    signaller: WeakRef<Signallable>,
+    signaller: Option<WeakRef<Signallable>>,
     session_id: String,
     tx_stop: std::sync::mpsc::Sender<bool>,
 }
@@ -47,7 +46,7 @@ pub struct GrpcClient {
 impl GrpcClient {
     pub fn new(
         address: String,
-        signaller: WeakRef<Signallable>,
+        signaller: Option<WeakRef<Signallable>>,
         session_id: Option<String>,
         tx_stop: Option<std::sync::mpsc::Sender<bool>>,
     ) -> Result<Self, tonic::transport::Error> {
@@ -100,7 +99,7 @@ impl GrpcClient {
             self.aborting.store(true, Ordering::Relaxed);
             warn!("grpc connection lost. aborting session");
             self.tx_stop.send(true).unwrap();
-            self.signaller
+            self.signaller.as_ref().unwrap()
             //.lock()
             .upgrade()
             .unwrap()
@@ -367,20 +366,6 @@ impl GrpcClient {
         trace!("Handling antennas command: {:?}", cmd);
 
         self.rt.block_on(self.dxl_motor_sub.send_command(cmd))?;
-
-        /*if let Some(antennas_goal) = cmd.antennas_goal {
-            trace!("antennas_goal");
-            self.rt
-                .block_on(self.head_stub.set_antennas_position(antennas_goal))?;
-        } else if let Some(turn_on) = cmd.turn_on {
-            trace!("antennas_turn_on");
-            self.rt.block_on(self.head_stub.turn_on(turn_on))?;
-        } else if let Some(turn_off) = cmd.turn_off {
-            trace!("antennas_turn_off");
-            self.rt.block_on(self.head_stub.turn_off(turn_off))?;
-        } else {
-            warn!("Unknown antennas command: {:?}", cmd);
-        }*/
         Ok(())
     }
 }

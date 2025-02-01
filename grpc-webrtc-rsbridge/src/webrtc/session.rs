@@ -85,7 +85,7 @@ impl Session {
         thread::spawn(move || {
             match GrpcClient::new(
                 grpc_address,
-                signaller,
+                Some(signaller),
                 Some(session_id),
                 Some(tx_stop_thread_clone),
             ) {
