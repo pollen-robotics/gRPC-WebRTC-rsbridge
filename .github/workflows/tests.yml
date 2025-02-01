@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Install Gstreamer
+        run: sudo apt-get -y install libglib2.0-dev libgstreamer1.0-dev
+
       - uses: actions/checkout@v4
         with:
           submodules: "true"
