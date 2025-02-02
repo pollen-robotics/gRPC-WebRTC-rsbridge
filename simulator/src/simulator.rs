@@ -1,4 +1,3 @@
-use ::glib::property::PropertyGet;
 use gst::glib;
 use gst::glib::WeakRef;
 use gst::prelude::*;

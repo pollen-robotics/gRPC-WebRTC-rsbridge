@@ -45,8 +45,8 @@ pub mod component {
     pub mod dynamixel_motor {
         tonic::include_proto!("component.dynamixel_motor");
     }
-    pub mod sound {
-        tonic::include_proto!("component.sound");
+    pub mod audio {
+        tonic::include_proto!("component.audio");
     }
 }
 
