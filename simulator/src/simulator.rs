@@ -255,7 +255,11 @@ impl Simulator {
 
                     let mut frequency_local = frequency_clone.load(Ordering::Relaxed);
                     frequency_local += 1;
-                    //debug!("frequency: {}", frequency_local);
+                    let sample_duration = Duration::from_micros(1000000 / frequency_local);
+                    debug!(
+                        "frequency: {frequency_local} sample duration {}",
+                        sample_duration.as_micros()
+                    );
                     if frequency_local > 1500 {
                         main_loop_clone.quit();
                     } else {
@@ -358,17 +362,8 @@ impl Simulator {
                 let data = glib::Bytes::from_owned(commands.encode_to_vec());
                 channel.send_data(Some(&data));
                 let sample_duration =
-                    Duration::from_millis(1000 / frequency.load(Ordering::Relaxed));
+                    Duration::from_micros(1000000 / frequency.load(Ordering::Relaxed));
                 std::thread::sleep(sample_duration);
-                /*if bench_mode {
-                    //sample_duration += Duration::from_millis(100);
-                    frequency += 1;
-                    sample_duration = Duration::from_millis(1000 / frequency);
-                    //debug!("duration millis: {}", sample_duration.as_millis());
-                    if frequency > 1500 {
-                        main_loop.quit();
-                    }
-                }*/
             }
         });
     }
