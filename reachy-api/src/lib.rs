@@ -45,9 +45,6 @@ pub mod component {
     pub mod dynamixel_motor {
         tonic::include_proto!("component.dynamixel_motor");
     }
-    pub mod audio {
-        tonic::include_proto!("component.audio");
-    }
 }
 
 pub mod bridge {
