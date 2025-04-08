@@ -11,6 +11,9 @@ pub mod reachy {
         pub mod head {
             tonic::include_proto!("reachy.part.head");
         }
+        pub mod tripod {
+            tonic::include_proto!("reachy.part.tripod");
+        }
         pub mod mobile {
             pub mod base {
                 pub mod mobility {
