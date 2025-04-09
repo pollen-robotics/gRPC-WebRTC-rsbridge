@@ -68,7 +68,7 @@ impl Stats {
                     //debug!("Stats: {:?}", stats);
                     let stats = Stats::serialize_value(&stats.to_value()).unwrap();
                     debug!("Stats: {}", serde_json::to_string_pretty(&stats).unwrap());
-                    let msg = WsMessage::Text(serde_json::to_string(&stats).unwrap());
+                    let msg = WsMessage::Text(serde_json::to_string(&stats).unwrap().into());
 
                     let listeners = state_clone.lock().unwrap().listeners.clone();
 
