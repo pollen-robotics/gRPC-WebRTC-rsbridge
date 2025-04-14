@@ -236,11 +236,11 @@ impl Simulator {
         frequency: u16,
         bench_mode: bool,
     ) {
-        let radius = 0.2f64; //Circle radius
+        let radius = 0.1f64; //Circle radius
         let fixed_x = 0.4f64; // Fixed x-coordinate
         let center_y = 0f64;
-        let center_z = 0.1f64; // Center of the circle in y-z plane
-                               //let mut frequency = frequency as u64; //Update frequency in Hz
+        let center_z = -0.1f64; // Center of the circle in y-z plane
+                                //let mut frequency = frequency as u64; //Update frequency in Hz
         let frequency = Arc::new(AtomicU64::new(frequency as u64));
         let frequency_clone = frequency.clone();
         //let mut sample_duration = Duration::from_millis(1000 / frequency);
@@ -296,7 +296,7 @@ impl Simulator {
                                 data: Vec::from([
                                     0f64,
                                     0f64,
-                                    1f64,
+                                    -1f64,
                                     fixed_x,
                                     0f64,
                                     1f64,
@@ -335,7 +335,7 @@ impl Simulator {
                                 data: Vec::from([
                                     0f64,
                                     0f64,
-                                    1f64,
+                                    -1f64,
                                     fixed_x,
                                     0f64,
                                     1f64,

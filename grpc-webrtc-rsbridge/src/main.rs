@@ -23,11 +23,11 @@ struct Args {
     #[arg(long, default_value_t = 8443)]
     signalling_port: u16,
 
-    /// Gstreamer signalling server ip
+    /// SDK Server server ip
     #[arg(long, default_value = "127.0.0.1")]
     grpc_host: String,
 
-    /// Gstreamer signaling server port
+    /// SDK Server server port
     #[arg(long, default_value_t = 50051)]
     grpc_port: u16,
 }
