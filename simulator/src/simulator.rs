@@ -364,81 +364,60 @@ impl Simulator {
         let obj = arr.get(0)?.as_object()?;
 
         if let Some(val) = obj.get("armCommand") {
-            debug!("armCommand found {}", val);
-
-            if let Some(acg_val) = val.get("armCartesianGoal") {
-                return Some(AnyCommand {
-                    command: Some(ArmCommand(reachy_api::bridge::ArmCommand {
-                        arm_cartesian_goal: Some(ArmCartesianGoal {
-                            id: Some(PartId {
-                                id: val
-                                    .get("armCartesianGoal")
-                                    .and_then(|g| g.get("id"))
-                                    .unwrap()
-                                    .get("id")
-                                    .and_then(|id| id.as_u64())
-                                    .unwrap() as u32,
-
-                                name: val
-                                    .get("armCartesianGoal")
-                                    .and_then(|g| g.get("id"))
-                                    .unwrap()
-                                    .get("name")
-                                    .and_then(|n| n.as_str())
-                                    .unwrap()
-                                    .to_string(),
-                            }),
-                            duration: Some(1.0f32),
-                            goal_pose: Some(Matrix4x4 {
-                                data: Vec::from(
-                                    if let Some(goal_pose_data) =
-                                        acg_val.get("goalPose").and_then(|gp| gp.get("data"))
-                                    {
-                                        if let Some(array) = goal_pose_data.as_array() {
-                                            let data: Vec<f64> =
-                                                array.iter().filter_map(|v| v.as_f64()).collect();
-                                            data
-                                        } else {
-                                            Vec::new()
-                                        }
-                                        //println!("goalPose : {}", goal_pose_data);
-                                    } else {
-                                        Vec::new()
-                                    },
-                                ),
-                            }),
+            return Some(AnyCommand {
+                command: Some(ArmCommand(reachy_api::bridge::ArmCommand {
+                    arm_cartesian_goal: match val.get("armCartesianGoal") {
+                        None => None,
+                        Some(acg_val) => Some(ArmCartesianGoal {
+                            id: match acg_val.get("id") {
+                                None => None,
+                                Some(id_obj) => Some(PartId {
+                                    id: id_obj.get("id").and_then(|id| id.as_u64()).unwrap_or(0)
+                                        as u32,
+                                    name: id_obj
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                }),
+                            },
+                            //duration: Some(1.0),
+                            goal_pose: match acg_val
+                                .get("goalPose")
+                                .and_then(|gp| gp.get("data"))
+                                .and_then(|goal_pose_data| goal_pose_data.as_array())
+                            {
+                                None => None,
+                                Some(arr) => Some(Matrix4x4 {
+                                    data: arr.iter().filter_map(|v| v.as_f64()).collect(),
+                                }),
+                            },
                             ..Default::default()
                         }),
-                        ..Default::default()
-                    })),
-                });
-            } else if let Some(sl_val) = val.get("speedLimit") {
-                return Some(AnyCommand {
-                    command: Some(ArmCommand(reachy_api::bridge::ArmCommand {
-                        speed_limit: Some(SpeedLimitRequest {
-                            id: Some(PartId {
-                                id: sl_val
-                                    .get("id")
-                                    .unwrap()
-                                    .get("id")
-                                    .and_then(|id| id.as_u64())
-                                    .unwrap() as u32,
-
-                                name: sl_val
-                                    .get("id")
-                                    .unwrap()
-                                    .get("name")
-                                    .and_then(|n| n.as_str())
-                                    .unwrap()
-                                    .to_string(),
-                            }),
-                            limit: sl_val.get("limit").and_then(|sl| sl.as_u64()).unwrap() as u32,
+                    },
+                    speed_limit: match val.get("speedLimit") {
+                        None => None,
+                        Some(sl_val) => Some(SpeedLimitRequest {
+                            id: match sl_val.get("id") {
+                                None => None,
+                                Some(id_obj) => Some(PartId {
+                                    id: id_obj.get("id").and_then(|id| id.as_u64()).unwrap_or(0)
+                                        as u32,
+                                    name: id_obj
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                }),
+                            },
+                            limit: sl_val.get("limit").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
                         }),
-                        ..Default::default()
-                    })),
-                });
-            }
+                    },
+                    ..Default::default()
+                })),
+            });
         }
+
         if let Some(val) = obj.get("neckCommand") {
             debug!("neckCommand found {}", val);
             return Some(AnyCommand {
@@ -779,6 +758,23 @@ impl Simulator {
                 ..Default::default()
             })),
         };
+
+        let left_hand = AnyCommand {
+            command: Some(HandCommand(reachy_api::bridge::HandCommand {
+                turn_on: reachy
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .l_hand
+                    .as_ref()
+                    .unwrap()
+                    .part_id
+                    .clone(),
+                ..Default::default()
+            })),
+        };
+
         let right_arm = AnyCommand {
             command: Some(ArmCommand(reachy_api::bridge::ArmCommand {
                 turn_on: reachy
@@ -787,6 +783,22 @@ impl Simulator {
                     .as_ref()
                     .unwrap()
                     .r_arm
+                    .as_ref()
+                    .unwrap()
+                    .part_id
+                    .clone(),
+                ..Default::default()
+            })),
+        };
+
+        let right_hand = AnyCommand {
+            command: Some(HandCommand(reachy_api::bridge::HandCommand {
+                turn_on: reachy
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .r_hand
                     .as_ref()
                     .unwrap()
                     .part_id
@@ -830,7 +842,7 @@ impl Simulator {
         };
 
         let commands = AnyCommands {
-            commands: Vec::from([left_arm, right_arm, neck, mobilebase]),
+            commands: Vec::from([left_arm, left_hand, right_arm, right_hand, neck, mobilebase]),
         };
         let data = glib::Bytes::from_owned(commands.encode_to_vec());
         channel.send_data(Some(&data));
