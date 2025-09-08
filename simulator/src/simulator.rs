@@ -25,6 +25,8 @@ use reachy_api::reachy::part::hand::HandPosition;
 use reachy_api::reachy::part::hand::HandPositionRequest;
 use reachy_api::reachy::part::head::NeckJointGoal;
 use reachy_api::reachy::part::head::NeckOrientation;
+use reachy_api::reachy::part::mobile::base::mobility::DirectionVector;
+use reachy_api::reachy::part::mobile::base::utility::ZuuuModeCommand;
 use reachy_api::reachy::part::PartId;
 use reachy_api::reachy::{Reachy, ReachyState, ReachyStatus};
 use serde_json::Value;
@@ -449,10 +451,6 @@ impl Simulator {
             }
         }
         if let Some(val) = obj.get("neckCommand") {
-            /*let nc: NeckCommand = serde_json::from_value(val.clone()).ok()?;
-            return Some(AnyCommand {
-                command: Some(reachy_api::bridge::any_command::Command::NeckCommand(nc)),
-            });*/
             debug!("neckCommand found {}", val);
             return Some(AnyCommand {
                 command: Some(NeckCommand(reachy_api::bridge::NeckCommand {
@@ -565,17 +563,69 @@ impl Simulator {
                 })),
             });
         }
-        // Ajouter d'autres types custom si besoin
+
         if let Some(val) = obj.get("mobileBaseCommand") {
-            /*  let mbc: reachy_api::bridge::MobileBaseCommand =
-                serde_json::from_value(val.clone()).ok()?;
+            debug!("mobileBaseCommand found {}", val);
             return Some(AnyCommand {
-                command: Some(reachy_api::bridge::any_command::Command::MobileBaseCommand(
-                    mbc,
-                )),
-            });*/
-            println!("mobileBaseCommand found but not implemented {}", val);
-            return None;
+                command: Some(MobileBaseCommand(reachy_api::bridge::MobileBaseCommand {
+                    mobile_base_mode: Some(ZuuuModeCommand {
+                        mode: match val.get("mobileBaseMode") {
+                            Some(m) if m == "CMD_VEL" => 1,
+                            _ => return None,
+                        },
+                        ..Default::default()
+                    }),
+                    target_direction: match val.get("targetDirection") {
+                        None => return None,
+                        Some(target_direction_val) => Some(
+                            reachy::part::mobile::base::mobility::TargetDirectionCommand {
+                                id: Some(PartId {
+                                    id: target_direction_val
+                                        .get("id")
+                                        .unwrap()
+                                        .get("id")
+                                        .and_then(|id| id.as_u64())
+                                        .unwrap() as u32,
+
+                                    name: target_direction_val
+                                        .get("id")
+                                        .unwrap()
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap()
+                                        .to_string(),
+                                }),
+                                direction: Some(DirectionVector {
+                                    x: Some(
+                                        target_direction_val
+                                            .get("direction")
+                                            .and_then(|d| d.get("x"))
+                                            .and_then(|x| x.as_f64())
+                                            .unwrap()
+                                            as f32,
+                                    ),
+                                    y: Some(
+                                        target_direction_val
+                                            .get("direction")
+                                            .and_then(|d| d.get("y"))
+                                            .and_then(|y| y.as_f64())
+                                            .unwrap()
+                                            as f32,
+                                    ),
+                                    theta: Some(
+                                        target_direction_val
+                                            .get("direction")
+                                            .and_then(|d| d.get("theta"))
+                                            .and_then(|z| z.as_f64())
+                                            .unwrap()
+                                            as f32,
+                                    ),
+                                }),
+                            },
+                        ),
+                    },
+                })),
+            });
         }
         None
     }
