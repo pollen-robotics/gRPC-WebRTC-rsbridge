@@ -12,13 +12,19 @@ use reachy_api::bridge::any_command::Command::ArmCommand;
 use reachy_api::bridge::service_response::Response;
 use reachy_api::bridge::{service_request, Connect, GetReachy, ServiceRequest, ServiceResponse};
 use reachy_api::bridge::{AnyCommand, AnyCommands};
+use reachy_api::reachy;
 use reachy_api::reachy::kinematics::Matrix4x4;
-use reachy_api::reachy::part::arm::ArmCartesianGoal;
+use reachy_api::reachy::part::arm::{ArmCartesianGoal, SpeedLimitRequest};
+use reachy_api::reachy::part::PartId;
 use reachy_api::reachy::{Reachy, ReachyState, ReachyStatus};
+use serde_json::Value;
+use std::io::Read;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
+use std::{fs, io};
 
 pub struct Simulator {
     signaller: Signaller,
@@ -34,6 +40,7 @@ impl Simulator {
         rx_stop_signal: std::sync::mpsc::Receiver<bool>,
         frequency: u16,
         bench_mode: bool,
+        recorded_data: bool,
     ) -> Self {
         let main_loop = Arc::new(glib::MainLoop::new(None, false));
         let main_loop_clone = main_loop.clone();
@@ -54,6 +61,7 @@ impl Simulator {
             main_loop.clone(),
             frequency,
             bench_mode,
+            recorded_data,
         );
 
         signaller.connect_closure(
@@ -145,6 +153,7 @@ impl Simulator {
         main_loop: Arc<glib::MainLoop>,
         frequency: u16,
         bench_mode: bool,
+        recorded_data: bool,
     ) -> (gst::Pipeline, gst::Element) {
         let pipeline = gst::Pipeline::builder()
             .name(format!("session-pipeline-{peer_id}"))
@@ -169,6 +178,7 @@ impl Simulator {
                     main_loop,
                     frequency,
                     bench_mode,
+                    recorded_data,
                 );
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
@@ -187,6 +197,7 @@ impl Simulator {
         main_loop: Arc<glib::MainLoop>,
         frequency: u16,
         bench_mode: bool,
+        recorded_data: bool,
     ) {
         webrtcbin.upgrade().unwrap().connect_closure(
             "on-data-channel",
@@ -217,6 +228,7 @@ impl Simulator {
                             main_loop,
                             frequency,
                             bench_mode,
+                            recorded_data,
                         );
                     } else if label.starts_with("reachy_command_reliable") {
                         debug!("Received reachy command reliable data channel");
@@ -235,19 +247,11 @@ impl Simulator {
         main_loop: Arc<glib::MainLoop>,
         frequency: u16,
         bench_mode: bool,
+        recorded_data: bool,
     ) {
-        let radius = 0.1f64; //Circle radius
-        let fixed_x = 0.4f64; // Fixed x-coordinate
-        let center_y = 0f64;
-        let center_z = -0.1f64; // Center of the circle in y-z plane
-                                //let mut frequency = frequency as u64; //Update frequency in Hz
+        let main_loop_clone = main_loop.clone();
         let frequency = Arc::new(AtomicU64::new(frequency as u64));
         let frequency_clone = frequency.clone();
-        //let mut sample_duration = Duration::from_millis(1000 / frequency);
-        let circle_period = 3f64;
-        let t0 = Instant::now();
-
-        let main_loop_clone = main_loop.clone();
         if bench_mode {
             std::thread::spawn(move || {
                 while main_loop_clone.is_running() {
@@ -269,6 +273,220 @@ impl Simulator {
             });
         }
 
+        if recorded_data {
+            let results = Simulator::open_txt_files_in_data();
+            /*debug!(
+                "Number of txt files found in 'data': {}",
+                results.unwrap().len()
+            );*/
+            if let Ok(files) = results {
+                std::thread::spawn(move || {
+                    if files.len() == 0 {
+                        error!("Data files are empty");
+                        return;
+                    }
+                    // Transpose les fichiers: Vec<Vec<String>>
+                    let lines_vecs: Vec<Vec<&str>> = files
+                        .iter()
+                        .map(|(_, content)| content.lines().collect())
+                        .collect();
+                    let min_len = lines_vecs
+                        .iter()
+                        .map(|lines| lines.len())
+                        .min()
+                        .unwrap_or(0);
+                    for i in 0..min_len {
+                        if !main_loop.is_running() {
+                            return;
+                        }
+                        // Crée une seule ligne réunissant les lignes de chaque fichier à l'indice i
+                        /*let joined = lines_vecs
+                            .iter()
+                            .map(|lines| lines[i])
+                            .collect::<Vec<&str>>()
+                            .join(" | ");
+                        println!("{}", joined);*/
+
+                        /*for lines in &lines_vecs {
+                            //println!("{}", lines[i]);
+                            Simulator::any_command_from_line(lines[i]);
+                        }
+                        println!("---");
+
+                        let commands = AnyCommands {
+                            commands: Vec::from([left_arm, right_arm]),
+                        };*/
+
+                        let mut commands = Vec::new();
+                        for lines in &lines_vecs {
+                            if let Some(cmd) = Simulator::any_command_from_line(lines[i]) {
+                                commands.push(cmd);
+                            }
+                        }
+
+                        let data = glib::Bytes::from_owned(
+                            AnyCommands { commands: commands }.encode_to_vec(),
+                        );
+                        channel.send_data(Some(&data));
+
+                        let sample_duration =
+                            Duration::from_micros(1000000 / frequency.load(Ordering::Relaxed));
+                        std::thread::sleep(sample_duration);
+                    }
+                });
+            }
+        } else {
+            let radius = 0.1f64; //Circle radius
+            let fixed_x = 0.4f64; // Fixed x-coordinate
+            let center_y = 0f64;
+            let center_z = -0.1f64; // Center of the circle in y-z plane
+            let circle_period = 3f64;
+            let t0 = Instant::now();
+            Simulator::spawn_circle_motion_thread(
+                main_loop.clone(),
+                t0,
+                circle_period,
+                center_y,
+                center_z,
+                radius,
+                fixed_x,
+                reachy,
+                channel,
+                frequency.clone(),
+            );
+        }
+    }
+
+    fn any_command_from_line(line: &str) -> Option<AnyCommand> {
+        use reachy_api::bridge::{
+            AnyCommand, ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
+        };
+
+        // Parse la ligne JSON
+        let v: Value = serde_json::from_str(line).ok()?;
+        // Attendu: Vec de 1 élément
+        let arr = v.as_array()?;
+        let obj = arr.get(0)?.as_object()?;
+
+        if let Some(val) = obj.get("armCommand") {
+            println!("armCommand found but not implemented {}", val);
+
+            if let Some(acg_val) = val.get("armCartesianGoal") {
+                return Some(AnyCommand {
+                    command: Some(ArmCommand(reachy_api::bridge::ArmCommand {
+                        arm_cartesian_goal: Some(ArmCartesianGoal {
+                            id: Some(PartId {
+                                id: val
+                                    .get("armCartesianGoal")
+                                    .and_then(|g| g.get("id"))
+                                    .unwrap()
+                                    .get("id")
+                                    .and_then(|id| id.as_u64())
+                                    .unwrap() as u32,
+
+                                name: val
+                                    .get("armCartesianGoal")
+                                    .and_then(|g| g.get("id"))
+                                    .unwrap()
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap()
+                                    .to_string(),
+                            }),
+                            duration: Some(1.0f32),
+                            goal_pose: Some(Matrix4x4 {
+                                data: Vec::from(
+                                    if let Some(goal_pose_data) =
+                                        acg_val.get("goalPose").and_then(|gp| gp.get("data"))
+                                    {
+                                        if let Some(array) = goal_pose_data.as_array() {
+                                            let data: Vec<f64> =
+                                                array.iter().filter_map(|v| v.as_f64()).collect();
+                                            data
+                                        } else {
+                                            Vec::new()
+                                        }
+                                        //println!("goalPose : {}", goal_pose_data);
+                                    } else {
+                                        Vec::new()
+                                    },
+                                ),
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })),
+                });
+            } else if let Some(sl_val) = val.get("speedLimit") {
+                return Some(AnyCommand {
+                    command: Some(ArmCommand(reachy_api::bridge::ArmCommand {
+                        speed_limit: Some(SpeedLimitRequest {
+                            id: Some(PartId {
+                                id: sl_val
+                                    .get("id")
+                                    .unwrap()
+                                    .get("id")
+                                    .and_then(|id| id.as_u64())
+                                    .unwrap() as u32,
+
+                                name: sl_val
+                                    .get("id")
+                                    .unwrap()
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap()
+                                    .to_string(),
+                            }),
+                            limit: sl_val.get("limit").and_then(|sl| sl.as_u64()).unwrap() as u32,
+                        }),
+                        ..Default::default()
+                    })),
+                });
+            }
+        }
+        if let Some(val) = obj.get("neckCommand") {
+            /*let nc: NeckCommand = serde_json::from_value(val.clone()).ok()?;
+            return Some(AnyCommand {
+                command: Some(reachy_api::bridge::any_command::Command::NeckCommand(nc)),
+            });*/
+            println!("neckCommand found but not implemented {}", val);
+            return None;
+        }
+        if let Some(val) = obj.get("handCommand") {
+            /*let hc: HandCommand = serde_json::from_value(val.clone()).ok()?;
+            return Some(AnyCommand {
+                command: Some(reachy_api::bridge::any_command::Command::HandCommand(hc)),
+            });*/
+            println!("handCommand found but not implemented {}", val);
+            return None;
+        }
+        // Ajouter d'autres types custom si besoin
+        if let Some(val) = obj.get("mobileBaseCommand") {
+            /*  let mbc: reachy_api::bridge::MobileBaseCommand =
+                serde_json::from_value(val.clone()).ok()?;
+            return Some(AnyCommand {
+                command: Some(reachy_api::bridge::any_command::Command::MobileBaseCommand(
+                    mbc,
+                )),
+            });*/
+            println!("mobileBaseCommand found but not implemented {}", val);
+            return None;
+        }
+        None
+    }
+
+    fn spawn_circle_motion_thread(
+        main_loop: Arc<glib::MainLoop>,
+        t0: std::time::Instant,
+        circle_period: f64,
+        center_y: f64,
+        center_z: f64,
+        radius: f64,
+        fixed_x: f64,
+        reachy: Arc<Mutex<Option<Reachy>>>,
+        channel: WebRTCDataChannel,
+        frequency: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    ) {
         std::thread::spawn(move || {
             while main_loop.is_running() {
                 let elapsed_time = t0.elapsed();
@@ -366,6 +584,33 @@ impl Simulator {
                 std::thread::sleep(sample_duration);
             }
         });
+    }
+
+    fn open_txt_files_in_data() -> io::Result<Vec<(String, String)>> {
+        let mut results = Vec::new();
+        let data_path = Path::new("simulator/data");
+
+        if data_path.is_dir() {
+            for entry in fs::read_dir(data_path)? {
+                let entry = entry?;
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    if ext == "txt" {
+                        let file_name = path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let mut file = fs::File::open(&path)?;
+                        let mut contents = String::new();
+                        file.read_to_string(&mut contents)?;
+                        results.push((file_name, contents));
+                    }
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     fn turn_on_arms(channel: &WebRTCDataChannel, reachy: Arc<Mutex<Option<Reachy>>>) {
