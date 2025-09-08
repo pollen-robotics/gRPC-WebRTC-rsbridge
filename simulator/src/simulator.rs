@@ -8,13 +8,23 @@ use gstrswebrtc::signaller::WebRTCSignallerRole;
 use gstwebrtc::WebRTCDataChannel;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use reachy_api::bridge::any_command::Command::ArmCommand;
+use reachy_api::bridge::any_command::Command::{
+    ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
+};
 use reachy_api::bridge::service_response::Response;
 use reachy_api::bridge::{service_request, Connect, GetReachy, ServiceRequest, ServiceResponse};
 use reachy_api::bridge::{AnyCommand, AnyCommands};
 use reachy_api::reachy;
+use reachy_api::reachy::kinematics::rotation3d::Rotation;
 use reachy_api::reachy::kinematics::Matrix4x4;
+use reachy_api::reachy::kinematics::Quaternion;
+use reachy_api::reachy::kinematics::Rotation3d;
 use reachy_api::reachy::part::arm::{ArmCartesianGoal, SpeedLimitRequest};
+use reachy_api::reachy::part::hand::parallel_gripper_position::GripperPosition;
+use reachy_api::reachy::part::hand::HandPosition;
+use reachy_api::reachy::part::hand::HandPositionRequest;
+use reachy_api::reachy::part::head::NeckJointGoal;
+use reachy_api::reachy::part::head::NeckOrientation;
 use reachy_api::reachy::part::PartId;
 use reachy_api::reachy::{Reachy, ReachyState, ReachyStatus};
 use serde_json::Value;
@@ -358,18 +368,12 @@ impl Simulator {
     }
 
     fn any_command_from_line(line: &str) -> Option<AnyCommand> {
-        use reachy_api::bridge::{
-            AnyCommand, ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
-        };
-
-        // Parse la ligne JSON
         let v: Value = serde_json::from_str(line).ok()?;
-        // Attendu: Vec de 1 élément
         let arr = v.as_array()?;
         let obj = arr.get(0)?.as_object()?;
 
         if let Some(val) = obj.get("armCommand") {
-            println!("armCommand found but not implemented {}", val);
+            debug!("armCommand found {}", val);
 
             if let Some(acg_val) = val.get("armCartesianGoal") {
                 return Some(AnyCommand {
@@ -449,16 +453,117 @@ impl Simulator {
             return Some(AnyCommand {
                 command: Some(reachy_api::bridge::any_command::Command::NeckCommand(nc)),
             });*/
-            println!("neckCommand found but not implemented {}", val);
-            return None;
+            debug!("neckCommand found {}", val);
+            return Some(AnyCommand {
+                command: Some(NeckCommand(reachy_api::bridge::NeckCommand {
+                    neck_goal: Some(NeckJointGoal {
+                        id: Some(PartId {
+                            id: val
+                                .get("neckGoal")
+                                .and_then(|nc| nc.get("id"))
+                                .unwrap()
+                                .get("id")
+                                .and_then(|id| id.as_u64())
+                                .unwrap() as u32,
+
+                            name: val
+                                .get("neckGoal")
+                                .and_then(|nc| nc.get("id"))
+                                .unwrap()
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap()
+                                .to_string(),
+                        }),
+                        joints_goal: Some(NeckOrientation {
+                            rotation: Some(Rotation3d {
+                                rotation: Some(Rotation::Q(Quaternion {
+                                    w: val
+                                        .get("neckGoal")
+                                        .and_then(|nc| nc.get("jointsGoal"))
+                                        .and_then(|o| o.get("rotation"))
+                                        .and_then(|r| r.get("q"))
+                                        .and_then(|q| q.get("w"))
+                                        .and_then(|w| w.as_f64())
+                                        .unwrap(),
+                                    x: val
+                                        .get("neckGoal")
+                                        .and_then(|nc| nc.get("jointsGoal"))
+                                        .and_then(|o| o.get("rotation"))
+                                        .and_then(|r| r.get("q"))
+                                        .and_then(|q| q.get("x"))
+                                        .and_then(|x| x.as_f64())
+                                        .unwrap(),
+                                    y: val
+                                        .get("neckGoal")
+                                        .and_then(|nc| nc.get("jointsGoal"))
+                                        .and_then(|o| o.get("rotation"))
+                                        .and_then(|r| r.get("q"))
+                                        .and_then(|q| q.get("y"))
+                                        .and_then(|y| y.as_f64())
+                                        .unwrap(),
+                                    z: val
+                                        .get("neckGoal")
+                                        .and_then(|nc| nc.get("jointsGoal"))
+                                        .and_then(|o| o.get("rotation"))
+                                        .and_then(|r| r.get("q"))
+                                        .and_then(|q| q.get("z"))
+                                        .and_then(|z| z.as_f64())
+                                        .unwrap(),
+                                })),
+                            }),
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+            });
         }
         if let Some(val) = obj.get("handCommand") {
-            /*let hc: HandCommand = serde_json::from_value(val.clone()).ok()?;
+            debug!("handCommand found {}", val);
             return Some(AnyCommand {
-                command: Some(reachy_api::bridge::any_command::Command::HandCommand(hc)),
-            });*/
-            println!("handCommand found but not implemented {}", val);
-            return None;
+                command: Some(HandCommand(reachy_api::bridge::HandCommand {
+                    hand_goal: Some(HandPositionRequest {
+                        id: Some(PartId {
+                            id: val
+                                .get("handGoal")
+                                .and_then(|hc| hc.get("id"))
+                                .unwrap()
+                                .get("id")
+                                .and_then(|id| id.as_u64())
+                                .unwrap() as u32,
+
+                            name: val
+                                .get("handGoal")
+                                .and_then(|hg| hg.get("id"))
+                                .unwrap()
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap()
+                                .to_string(),
+                        }),
+                        position: Some(HandPosition {
+                            position: Some(
+                                reachy::part::hand::hand_position::Position::ParallelGripper(
+                                    reachy::part::hand::ParallelGripperPosition {
+                                        gripper_position: Some(GripperPosition::OpeningPercentage(
+                                            val.get("handGoal")
+                                                .and_then(|hc| hc.get("position"))
+                                                .and_then(|hc| hc.get("parallelGripper"))
+                                                .and_then(|hg| hg.get("openingPercentage"))
+                                                .and_then(|p| p.as_f64())
+                                                .unwrap_or(0.0) //sometimes it's empty
+                                                as f32,
+                                        )),
+                                    },
+                                ),
+                            ),
+                        }),
+                    }),
+
+                    ..Default::default()
+                })),
+            });
         }
         // Ajouter d'autres types custom si besoin
         if let Some(val) = obj.get("mobileBaseCommand") {
