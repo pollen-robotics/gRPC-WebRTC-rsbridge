@@ -244,7 +244,7 @@ impl Simulator {
                         );
                     } else if label.starts_with("reachy_command_reliable") {
                         debug!("Received reachy command reliable data channel");
-                        Simulator::turn_on_arms(channel, reachy);
+                        Simulator::turn_on_robot(channel, reachy);
                     } else {
                         warn!("Received unknown data channel: {}", label);
                     }
@@ -297,42 +297,24 @@ impl Simulator {
                         error!("Data files are empty");
                         return;
                     }
-                    // Transpose les fichiers: Vec<Vec<String>>
+
                     let lines_vecs: Vec<Vec<&str>> = files
                         .iter()
                         .map(|(_, content)| content.lines().collect())
                         .collect();
-                    let min_len = lines_vecs
-                        .iter()
-                        .map(|lines| lines.len())
-                        .min()
-                        .unwrap_or(0);
-                    for i in 0..min_len {
-                        if !main_loop.is_running() {
-                            return;
-                        }
-                        // Crée une seule ligne réunissant les lignes de chaque fichier à l'indice i
-                        /*let joined = lines_vecs
-                            .iter()
-                            .map(|lines| lines[i])
-                            .collect::<Vec<&str>>()
-                            .join(" | ");
-                        println!("{}", joined);*/
 
-                        /*for lines in &lines_vecs {
-                            //println!("{}", lines[i]);
-                            Simulator::any_command_from_line(lines[i]);
-                        }
-                        println!("---");
+                    let lens: Vec<usize> = lines_vecs.iter().map(|lines| lines.len()).collect();
+                    let nb_files = lines_vecs.len();
+                    let mut idxs = vec![0usize; nb_files];
 
-                        let commands = AnyCommands {
-                            commands: Vec::from([left_arm, right_arm]),
-                        };*/
-
+                    while main_loop.is_running() {
                         let mut commands = Vec::new();
-                        for lines in &lines_vecs {
-                            if let Some(cmd) = Simulator::any_command_from_line(lines[i]) {
-                                commands.push(cmd);
+                        for (f, lines) in lines_vecs.iter().enumerate() {
+                            if !lines.is_empty() {
+                                let i = idxs[f];
+                                if let Some(cmd) = Simulator::any_command_from_line(lines[i]) {
+                                    commands.push(cmd);
+                                }
                             }
                         }
 
@@ -340,6 +322,13 @@ impl Simulator {
                             AnyCommands { commands: commands }.encode_to_vec(),
                         );
                         channel.send_data(Some(&data));
+
+                        for (i, idx) in idxs.iter_mut().enumerate() {
+                            *idx += 1;
+                            if *idx >= lens[i] {
+                                *idx = 0;
+                            }
+                        }
 
                         let sample_duration =
                             Duration::from_micros(1000000 / frequency.load(Ordering::Relaxed));
@@ -568,13 +557,14 @@ impl Simulator {
             debug!("mobileBaseCommand found {}", val);
             return Some(AnyCommand {
                 command: Some(MobileBaseCommand(reachy_api::bridge::MobileBaseCommand {
-                    mobile_base_mode: Some(ZuuuModeCommand {
-                        mode: match val.get("mobileBaseMode") {
-                            Some(m) if m == "CMD_VEL" => 1,
-                            _ => return None,
-                        },
-                        ..Default::default()
-                    }),
+                    mobile_base_mode: match val.get("mobileBaseMode") {
+                        None => None,
+                        Some(m) if m == "CMD_VEL" => Some(ZuuuModeCommand {
+                            mode: 1,
+                            ..Default::default()
+                        }),
+                        _ => return None,
+                    },
                     target_direction: match val.get("targetDirection") {
                         None => return None,
                         Some(target_direction_val) => Some(
@@ -768,7 +758,7 @@ impl Simulator {
         Ok(results)
     }
 
-    fn turn_on_arms(channel: &WebRTCDataChannel, reachy: Arc<Mutex<Option<Reachy>>>) {
+    fn turn_on_robot(channel: &WebRTCDataChannel, reachy: Arc<Mutex<Option<Reachy>>>) {
         if reachy.lock().unwrap().is_none() {
             warn!("cannot turn on. Reachy config not received");
             return;
@@ -804,8 +794,43 @@ impl Simulator {
                 ..Default::default()
             })),
         };
+
+        let neck = AnyCommand {
+            command: Some(NeckCommand(reachy_api::bridge::NeckCommand {
+                turn_on: reachy
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .head
+                    .as_ref()
+                    .unwrap()
+                    .part_id
+                    .clone(),
+                ..Default::default()
+            })),
+        };
+        let mobilebase = AnyCommand {
+            command: Some(MobileBaseCommand(reachy_api::bridge::MobileBaseCommand {
+                mobile_base_mode: Some(ZuuuModeCommand {
+                    mode: 1, //CMD_VEL
+                    id: reachy
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .mobile_base
+                        .as_ref()
+                        .unwrap()
+                        .part_id
+                        .clone(),
+                }),
+                ..Default::default()
+            })),
+        };
+
         let commands = AnyCommands {
-            commands: Vec::from([left_arm, right_arm]),
+            commands: Vec::from([left_arm, right_arm, neck, mobilebase]),
         };
         let data = glib::Bytes::from_owned(commands.encode_to_vec());
         channel.send_data(Some(&data));
