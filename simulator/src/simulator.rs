@@ -9,11 +9,12 @@ use gstwebrtc::WebRTCDataChannel;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use reachy_api::bridge::any_command::Command::{
-    ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
+    AntennasCommand, ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
 };
 use reachy_api::bridge::service_response::Response;
 use reachy_api::bridge::{service_request, Connect, GetReachy, ServiceRequest, ServiceResponse};
 use reachy_api::bridge::{AnyCommand, AnyCommands};
+use reachy_api::component::ComponentId;
 use reachy_api::reachy;
 use reachy_api::reachy::kinematics::rotation3d::Rotation;
 use reachy_api::reachy::kinematics::Matrix4x4;
@@ -297,6 +298,7 @@ impl Simulator {
                         error!("Data files are empty");
                         return;
                     }
+                    debug!("{} files found", files.len());
 
                     let lines_vecs: Vec<Vec<&str>> = files
                         .iter()
@@ -485,6 +487,45 @@ impl Simulator {
                 })),
             });
         }
+
+        if let Some(val) = obj.get("antennasCommand") {
+            debug!("antennasCommand found {}", val);
+            return Some(AnyCommand {
+                command: Some(AntennasCommand(
+                    reachy_api::component::dynamixel_motor::DynamixelMotorsCommand {
+                        cmd: Vec::from([
+                            reachy_api::component::dynamixel_motor::DynamixelMotorCommand {
+                                id: Some(ComponentId {
+                                    name: "antenna_left".to_string(),
+                                    ..Default::default()
+                                }),
+                                goal_position: val
+                                    .get("cmd")
+                                    .and_then(|cmd| cmd.get(0))
+                                    .and_then(|item| item.get("goalPosition"))
+                                    .and_then(|gp| gp.as_f64())
+                                    .map(|p| p as f32),
+                                ..Default::default()
+                            },
+                            reachy_api::component::dynamixel_motor::DynamixelMotorCommand {
+                                id: Some(ComponentId {
+                                    name: "antenna_right".to_string(),
+                                    ..Default::default()
+                                }),
+                                goal_position: val
+                                    .get("cmd")
+                                    .and_then(|cmd| cmd.get(1))
+                                    .and_then(|item| item.get("goalPosition"))
+                                    .and_then(|gp| gp.as_f64())
+                                    .map(|p| p as f32),
+                                ..Default::default()
+                            },
+                        ]),
+                    },
+                )),
+            });
+        }
+
         if let Some(val) = obj.get("handCommand") {
             debug!("handCommand found {}", val);
             return Some(AnyCommand {

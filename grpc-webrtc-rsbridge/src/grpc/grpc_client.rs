@@ -279,11 +279,9 @@ impl GrpcClient {
         } else if let Some(turn_on) = cmd.turn_on {
             trace!("arm_turn_on");
             self.rt.block_on(self.arm_stub.turn_on(turn_on))?;
-            self.set_compliancy_antennas(false)?;
         } else if let Some(turn_off) = cmd.turn_off {
             trace!("arm_turn_off");
             self.rt.block_on(self.arm_stub.turn_off(turn_off))?;
-            self.set_compliancy_antennas(true)?;
         } else if let Some(speed_limit) = cmd.speed_limit {
             trace!("arm_speed_limit");
             self.rt
@@ -326,9 +324,11 @@ impl GrpcClient {
         } else if let Some(turn_on) = cmd.turn_on {
             trace!("neck_turn_on");
             self.rt.block_on(self.head_stub.turn_on(turn_on))?;
+            self.set_compliancy_antennas(false)?;
         } else if let Some(turn_off) = cmd.turn_off {
             trace!("neck_turn_off");
             self.rt.block_on(self.head_stub.turn_off(turn_off))?;
+            self.set_compliancy_antennas(true)?;
         } else if let Some(speed_limit) = cmd.speed_limit {
             trace!("neck_speed_limit");
             self.rt
