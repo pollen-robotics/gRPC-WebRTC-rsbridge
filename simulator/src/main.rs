@@ -30,6 +30,14 @@ struct Args {
     /// Perfomance benchmarking
     #[arg(long, default_value_t = false)]
     bench_mode: bool,
+
+    /// Use recorded data (Gaelle Fantome)
+    #[arg(long, default_value_t = false)]
+    recorded_data: bool,
+
+    /// Test mode
+    #[arg(long, default_value_t = false)]
+    test: bool,
 }
 
 fn display_args(args: &Args) {
@@ -78,6 +86,8 @@ fn main() {
             rx_stop_signal,
             args.frequency,
             args.bench_mode,
+            args.recorded_data,
+            args.test,
         );
         simulator.run();
     } else {
