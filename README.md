@@ -21,3 +21,10 @@ The client sends messages to move both Reachy's arms. Optional arguments are `--
 ```bash
 RUST_LOG=debug cargo run --bin simulator -- --frequency 100 --bench-mode
 ```
+
+Recorded data (a.k.a. Gaelle Fantome) can be found in the `data/` folder.
+
+```bash
+RUST_LOG=debug cargo run --bin simulator -- --frequency 120 --recorded-data
+```
+*Note : start the command from the root of the repository. The data path is hardcoded*

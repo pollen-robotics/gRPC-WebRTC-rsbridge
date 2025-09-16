@@ -8,10 +8,15 @@ use gstrswebrtc::signaller::WebRTCSignallerRole;
 use gstwebrtc::WebRTCDataChannel;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use reachy_api::bridge::any_command::Command::ArmCommand;
+use reachy_api::bridge::any_command::Command::{
+    AntennasCommand, ArmCommand, HandCommand, MobileBaseCommand, NeckCommand,
+};
 use reachy_api::bridge::service_response::Response;
 use reachy_api::bridge::{service_request, Connect, GetReachy, ServiceRequest, ServiceResponse};
 use reachy_api::bridge::{AnyCommand, AnyCommands};
+use reachy_api::component::ComponentId;
+use reachy_api::reachy;
+use reachy_api::reachy::kinematics::rotation3d::Rotation;
 use reachy_api::reachy::kinematics::Matrix4x4;
 use reachy_api::reachy::kinematics::Quaternion;
 use reachy_api::reachy::kinematics::Rotation3d;
@@ -25,10 +30,14 @@ use reachy_api::reachy::part::mobile::base::mobility::DirectionVector;
 use reachy_api::reachy::part::mobile::base::utility::ZuuuModeCommand;
 use reachy_api::reachy::part::PartId;
 use reachy_api::reachy::{Reachy, ReachyState, ReachyStatus};
+use serde_json::Value;
+use std::io::Read;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
+use std::{fs, io};
 
 pub struct Simulator {
     signaller: Signaller,
@@ -267,18 +276,9 @@ impl Simulator {
         recorded_data: bool,
         test: bool,
     ) {
-        let radius = 0.1f64; //Circle radius
-        let fixed_x = 0.4f64; // Fixed x-coordinate
-        let center_y = 0f64;
-        let center_z = -0.1f64; // Center of the circle in y-z plane
-                                //let mut frequency = frequency as u64; //Update frequency in Hz
+        let main_loop_clone = main_loop.clone();
         let frequency = Arc::new(AtomicU64::new(frequency as u64));
         let frequency_clone = frequency.clone();
-        //let mut sample_duration = Duration::from_millis(1000 / frequency);
-        let circle_period = 3f64;
-        let t0 = Instant::now();
-
-        let main_loop_clone = main_loop.clone();
         if bench_mode {
             std::thread::spawn(move || {
                 while main_loop_clone.is_running() {
@@ -980,7 +980,34 @@ impl Simulator {
         });
     }
 
-    fn turn_on_arms(channel: &WebRTCDataChannel, reachy: Arc<Mutex<Option<Reachy>>>) {
+    fn open_txt_files_in_data() -> io::Result<Vec<(String, String)>> {
+        let mut results = Vec::new();
+        let data_path = Path::new("simulator/data");
+
+        if data_path.is_dir() {
+            for entry in fs::read_dir(data_path)? {
+                let entry = entry?;
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    if ext == "txt" {
+                        let file_name = path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let mut file = fs::File::open(&path)?;
+                        let mut contents = String::new();
+                        file.read_to_string(&mut contents)?;
+                        results.push((file_name, contents));
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn turn_on_robot(channel: &WebRTCDataChannel, reachy: Arc<Mutex<Option<Reachy>>>) {
         if reachy.lock().unwrap().is_none() {
             warn!("cannot turn on. Reachy config not received");
             return;
@@ -1001,6 +1028,23 @@ impl Simulator {
                 ..Default::default()
             })),
         };
+
+        let left_hand = AnyCommand {
+            command: Some(HandCommand(reachy_api::bridge::HandCommand {
+                turn_on: reachy
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .l_hand
+                    .as_ref()
+                    .unwrap()
+                    .part_id
+                    .clone(),
+                ..Default::default()
+            })),
+        };
+
         let right_arm = AnyCommand {
             command: Some(ArmCommand(reachy_api::bridge::ArmCommand {
                 turn_on: reachy
