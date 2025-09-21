@@ -512,7 +512,7 @@ impl Session {
                     }
                 }
                 drop(queue_commands_lock);
-                std::thread::sleep(Duration::from_millis(1));
+                std::thread::sleep(Duration::from_millis(4));
             }
         });
 
@@ -530,7 +530,7 @@ impl Session {
                     drop_counter.store(counter, Ordering::Relaxed);
                 }
                 drop(queue_commands_lock);
-                std::thread::sleep(Duration::from_millis(1));
+                std::thread::sleep(Duration::from_millis(4));
             }
             running_clone.store(false, Ordering::Relaxed);
             debug!("exit stream lossy command channel");
