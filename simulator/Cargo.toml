@@ -8,14 +8,14 @@ documentation.workspace = true
 
 [dependencies]
 reachy-api = { path = "../reachy-api" }
-clap = { version = "4.5.18", features = ["derive"] }
-env_logger = "0.11.5"
-log = "0.4.22"
-gst = { version = "0.23.4", package = "gstreamer" }
-gst-plugin-webrtc = { version = "0.13.4", default-features = false }
-gstwebrtc = { version = "0.23.4", package = "gstreamer-webrtc" }
+clap = { version = "4.5.48", features = ["derive"] }
+env_logger = "0.11.8"
+log = "0.4.28"
+gst = { version = "0.23.7", package = "gstreamer" }
+gst-plugin-webrtc = { version = "0.13.7", default-features = false }
+gstwebrtc = { version = "0.23.5", package = "gstreamer-webrtc" }
 glib = "0.19"
-mpsc = "0.2.3"
-signal-hook = "0.3.17"
-prost = "0.13.3"
-serde_json = "1.0.143"
+mpsc = "0.2.6"
+signal-hook = "0.3.18"
+prost = "0.13.5"
+serde_json = "1.0.145"

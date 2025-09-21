@@ -277,7 +277,7 @@ impl GrpcClient {
             self.rt
                 .block_on(self.arm_stub.send_arm_cartesian_goal(arm_cartesian_goal))?;
         } else if let Some(turn_on) = cmd.turn_on {
-            trace!("arm_turn_on");
+            debug!("arm_turn_on");
             self.rt.block_on(self.arm_stub.turn_on(turn_on))?;
         } else if let Some(turn_off) = cmd.turn_off {
             trace!("arm_turn_off");
