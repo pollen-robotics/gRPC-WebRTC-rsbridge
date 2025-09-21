@@ -17,5 +17,5 @@ gstwebrtc = { version = "0.23.5", package = "gstreamer-webrtc" }
 glib = "0.19"
 mpsc = "0.2.6"
 signal-hook = "0.3.18"
-prost = "0.13.5"
+prost = "0.14.1"
 serde_json = "1.0.145"
