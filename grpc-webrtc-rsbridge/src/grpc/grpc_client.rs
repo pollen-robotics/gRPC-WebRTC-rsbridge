@@ -1,4 +1,4 @@
-use log::{debug, error, trace, warn};
+use log::{info, debug, error, trace, warn};
 
 use gst::prelude::*;
 use reachy_api::component::dynamixel_motor::dynamixel_motor_service_client::DynamixelMotorServiceClient;
@@ -210,6 +210,7 @@ impl GrpcClient {
                 Some(any_command::Command::ArmCommand(arm_cmd)) => {
                     if self.handle_arm_command(arm_cmd).is_err() {
                         self.lost_connection();
+                        info!("Connection lost");
                         return Err("Connection lost".into());
                     }
                 }
@@ -277,19 +278,18 @@ impl GrpcClient {
             self.rt
                 .block_on(self.arm_stub.send_arm_cartesian_goal(arm_cartesian_goal))?;
         } else if let Some(turn_on) = cmd.turn_on {
-            trace!("arm_turn_on");
+            // info!("arm_turn_on");
+            info!("arm_turn_on command: {:?}", turn_on);
             self.rt.block_on(self.arm_stub.turn_on(turn_on))?;
-            self.set_compliancy_antennas(false)?;
         } else if let Some(turn_off) = cmd.turn_off {
-            trace!("arm_turn_off");
+            info!("arm_turn_off command: {:?}", turn_off);
             self.rt.block_on(self.arm_stub.turn_off(turn_off))?;
-            self.set_compliancy_antennas(true)?;
         } else if let Some(speed_limit) = cmd.speed_limit {
-            trace!("arm_speed_limit");
+            info!("arm_speed_limit command: {:?}", speed_limit);
             self.rt
                 .block_on(self.arm_stub.set_speed_limit(speed_limit))?;
         } else if let Some(torque_limit) = cmd.torque_limit {
-            trace!("arm_torque_limit");
+            info!("arm_torque_limit command: {:?}", torque_limit);
             self.rt
                 .block_on(self.arm_stub.set_torque_limit(torque_limit))?;
         } else {
