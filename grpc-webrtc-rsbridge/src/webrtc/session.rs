@@ -484,7 +484,7 @@ impl Session {
             let freq_command =
                 (current_counter_command - command_counter_old) / display_frequency;
             let freq_drop = (current_drop_counter - drop_counter_old) / display_frequency;
-            info!("Lossy Command freq: {freq_command} Hz - Drop frequency: {freq_drop} Hz");
+            info!("[PATCH] Lossy Command freq: {freq_command} Hz - Drop frequency: {freq_drop} Hz");
             command_counter_old = current_counter_command;
             drop_counter_old = current_drop_counter;
             std::thread::sleep(Duration::from_secs(display_frequency));
