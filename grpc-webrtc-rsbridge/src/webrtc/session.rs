@@ -446,97 +446,102 @@ impl Session {
         });
     }
 
-    fn configure_command_channel_lossy(
-        id: u32,
-        webrtcbin: WeakRef<gst::Element>,
-        grpc_client: Arc<Mutex<GrpcClient>>,
-        rx_command: std::sync::mpsc::Receiver<AnyCommands>,
-        running: Arc<AtomicBool>,
-    ) {
-        let _channel_command = webrtcbin
-            .upgrade()
-            .unwrap()
-            .emit_by_name::<WebRTCDataChannel>(
-                "create-data-channel",
-                &[
-                    &format!("reachy_command_lossy_{}", id),
-                    &gst::Structure::builder("config")
-                        .field("ordered", true)
-                        .field("max-retransmits", 0)
-                        .build(),
-                ],
-            );
+ fn configure_command_channel_lossy(
+    id: u32,
+    webrtcbin: WeakRef<gst::Element>,
+    grpc_client: Arc<Mutex<GrpcClient>>,
+    rx_command: std::sync::mpsc::Receiver<AnyCommands>,
+    running: Arc<AtomicBool>,
+) {
+    let _channel_command = webrtcbin
+        .upgrade()
+        .unwrap()
+        .emit_by_name::<WebRTCDataChannel>(
+            "create-data-channel",
+            &[
+                &format!("reachy_command_lossy_{}", id),
+                &gst::Structure::builder("config")
+                    .field("ordered", true)
+                    .field("max-retransmits", 0)
+                    .build(),
+            ],
+        );
 
-        let command_counter = Arc::new(AtomicU64::new(0));
-        let command_counter_clone = command_counter.clone();
-        let drop_counter = Arc::new(AtomicU64::new(0));
-        let drop_counter_clone = drop_counter.clone();
-        let running_clone = running.clone();
+    let command_counter = Arc::new(AtomicU64::new(0));
+    let command_counter_clone = command_counter.clone();
+    let drop_counter = Arc::new(AtomicU64::new(0));
+    let drop_counter_clone = drop_counter.clone();
+    let running_clone = running.clone();
 
-        thread::spawn(move || {
-            let mut command_counter_old = 0u64;
-            let mut drop_counter_old = 0u64;
-            let display_frequency = 1u64;
-            while running_clone.load(Ordering::Relaxed) {
-                let current_counter_command = command_counter_clone.load(Ordering::Relaxed);
-                let current_drop_counter = drop_counter_clone.load(Ordering::Relaxed);
-                let freq_command =
-                    (current_counter_command - command_counter_old) / display_frequency;
-                let freq_drop = (current_drop_counter - drop_counter_old) / display_frequency;
-                info!("Lossy Command freq: {freq_command} Hz - Drop frequency: {freq_drop} Hz");
-                command_counter_old = current_counter_command;
-                drop_counter_old = current_drop_counter;
-                std::thread::sleep(Duration::from_secs(display_frequency));
-            }
-        });
+    // Stats reporting thread
+    thread::spawn(move || {
+        let mut command_counter_old = 0u64;
+        let mut drop_counter_old = 0u64;
+        let display_frequency = 1u64;
+        while running_clone.load(Ordering::Relaxed) {
+            let current_counter_command = command_counter_clone.load(Ordering::Relaxed);
+            let current_drop_counter = drop_counter_clone.load(Ordering::Relaxed);
+            let freq_command =
+                (current_counter_command - command_counter_old) / display_frequency;
+            let freq_drop = (current_drop_counter - drop_counter_old) / display_frequency;
+            info!("[PATCH] Lossy Command freq: {freq_command} Hz - Drop frequency: {freq_drop} Hz");
+            command_counter_old = current_counter_command;
+            drop_counter_old = current_drop_counter;
+            std::thread::sleep(Duration::from_secs(display_frequency));
+        }
+    });
 
-        let queue_commands = Arc::new(Mutex::new(VecDeque::new()));
-        let queue_commands_clone = queue_commands.clone();
-        let running_clone = running.clone();
+    let queue_commands = Arc::new(Mutex::new(VecDeque::new()));
+    let queue_commands_clone = queue_commands.clone();
+    let running_clone = running.clone();
 
-        thread::spawn(move || {
-            while running.load(Ordering::Relaxed) {
-                let mut queue_commands_lock = queue_commands_clone.try_lock();
-                if let Ok(ref mut queue) = queue_commands_lock {
-                    if let Some(commands) = queue.pop_front() {
-                        //debug!("play");
-                        if grpc_client
-                            .lock()
-                            .unwrap()
-                            .handle_commands(commands)
-                            .is_err()
-                        {
-                            running.store(false, Ordering::Relaxed);
-                            break;
-                        };
-                    }
+    // Command processing thread
+    thread::spawn(move || {
+        while running.load(Ordering::Relaxed) {
+            let command_to_process = {
+                let mut queue = queue_commands_clone.lock().unwrap();
+                queue.pop_front()
+            };
+
+            if let Some(commands) = command_to_process {
+                if grpc_client
+                    .lock()
+                    .unwrap()
+                    .handle_commands(commands)
+                    .is_err()
+                {
+                    running.store(false, Ordering::Relaxed);
+                    break;
                 }
-                drop(queue_commands_lock);
-                std::thread::sleep(Duration::from_millis(1));
             }
-        });
+            
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
 
-        thread::spawn(move || {
-            while let Ok(commands) = rx_command.recv() {
-                //debug!("received lossy commands {:?}", commands);
-                let mut queue_commands_lock = queue_commands.try_lock(); //.push_back(commands);
-                if let Ok(ref mut queue) = queue_commands_lock {
-                    queue.push_back(commands);
-
-                    let counter = command_counter.load(Ordering::Relaxed) + 1;
-                    command_counter.store(counter, Ordering::Relaxed);
-                } else {
-                    let counter = drop_counter.load(Ordering::Relaxed) + 1;
-                    drop_counter.store(counter, Ordering::Relaxed);
-                }
-                drop(queue_commands_lock);
-                std::thread::sleep(Duration::from_millis(1));
+    // Command receiving thread
+    thread::spawn(move || {
+        while let Ok(commands) = rx_command.recv() {
+            let mut queue = queue_commands.lock().unwrap();
+            
+            // Add new command to queue
+            queue.push_back(commands);
+            
+            // If queue exceeds 10 items, drop the oldest
+            if queue.len() > 10 {
+                queue.pop_front();
+                drop_counter.fetch_add(1, Ordering::Relaxed);
+            } else {
+                command_counter.fetch_add(1, Ordering::Relaxed);
             }
-            running_clone.store(false, Ordering::Relaxed);
-            debug!("exit stream lossy command channel");
-        });
-    }
-
+            
+            drop(queue); // Explicitly release the lock
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        running_clone.store(false, Ordering::Relaxed);
+        debug!("exit stream lossy command channel");
+    });
+}
     fn configure_audit_channel(
         id: u32,
         webrtcbin: WeakRef<gst::Element>,
