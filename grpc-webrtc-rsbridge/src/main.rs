@@ -3,10 +3,13 @@ use log::{debug, info};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 mod webrtc;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 use std::thread;
 use webrtc::webrtc_bridge::WebRTCBridge;
 
 mod grpc;
+mod ros2;
+use ros2::Ros2Publisher;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -51,6 +54,13 @@ fn main() {
 
     display_args(&args);
 
+    // Initialize ROS2 publisher
+    info!("Initializing ROS2...");
+    let ros2_publisher = Arc::new(
+        Ros2Publisher::new().expect("Failed to create ROS2 publisher"),
+    );
+    info!("ROS2 initialized");
+
     gst::init().unwrap();
 
     let uri = format!("ws://{}:{}", args.signalling_host, args.signalling_port);
@@ -66,7 +76,13 @@ fn main() {
         }
     });
 
-    let server = WebRTCBridge::new(uri, args.producer_name, grpc_address, rx_stop_signal);
+    let server = WebRTCBridge::new(
+        uri,
+        args.producer_name,
+        grpc_address,
+        rx_stop_signal,
+        ros2_publisher,
+    );
 
     server.run();
     drop(server);

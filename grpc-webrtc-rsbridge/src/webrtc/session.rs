@@ -1,4 +1,5 @@
 use crate::grpc::grpc_client::GrpcClient;
+use crate::ros2::Ros2Publisher;
 use reachy_api::bridge::service_request::Request;
 use reachy_api::bridge::Connect;
 use reachy_api::bridge::{service_response, ConnectionStatus, ServiceResponse};
@@ -39,11 +40,16 @@ impl Session {
         session_id: String,
         grpc_address: String,
         main_loop: Arc<glib::MainLoop>,
+        ros2_publisher: Arc<Ros2Publisher>,
     ) -> Result<Self, String> {
         debug!("Constructor Session with peer {}", peer_id);
 
-        let (grpc_client, tx_stop_thread) =
-            Session::spawn_grpc_client(grpc_address, signaller.clone(), session_id.clone());
+        let (grpc_client, tx_stop_thread) = Session::spawn_grpc_client(
+            grpc_address,
+            signaller.clone(),
+            session_id.clone(),
+            ros2_publisher,
+        );
         let Some(grpc_client) = grpc_client else {
             return Err("Cannot create grpc client".into());
         };
@@ -73,6 +79,7 @@ impl Session {
         grpc_address: String,
         signaller: WeakRef<Signallable>,
         session_id: String,
+        ros2_publisher: Arc<Ros2Publisher>,
     ) -> (
         Option<Arc<Mutex<GrpcClient>>>,
         Option<std::sync::mpsc::Sender<bool>>,
@@ -88,6 +95,7 @@ impl Session {
                 Some(signaller),
                 Some(session_id),
                 Some(tx_stop_thread_clone),
+                ros2_publisher,
             ) {
                 Ok(client) => {
                     let grpc_client = Arc::new(Mutex::new(client));

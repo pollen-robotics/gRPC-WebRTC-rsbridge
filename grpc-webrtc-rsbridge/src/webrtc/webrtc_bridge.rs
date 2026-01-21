@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::ros2::Ros2Publisher;
 use crate::webrtc::session::Session;
 
 pub struct WebRTCBridge {
@@ -25,6 +26,7 @@ impl WebRTCBridge {
         name: String,
         grpc_address: String,
         rx_stop_signal: std::sync::mpsc::Receiver<bool>,
+        ros2_publisher: Arc<Ros2Publisher>,
     ) -> Self {
         debug!("Constructor GstWebRTCServer");
 
@@ -128,6 +130,8 @@ impl WebRTCBridge {
                 sessions,
                 #[strong]
                 main_loop,
+                #[strong]
+                ros2_publisher,
                 move |signaler: glib::Object,
                       session_id: &str,
                       peer_id: &str,
@@ -146,6 +150,7 @@ impl WebRTCBridge {
                         session_id.to_string(),
                         grpc_address.clone(),
                         main_loop.clone(),
+                        ros2_publisher.clone(),
                     ) {
                         Ok(session) => sessions
                             .lock()

@@ -18,6 +18,7 @@ use reachy_api::reachy::ReachyStreamStateRequest;
 use tokio::runtime::Runtime;
 use tonic::transport::Channel;
 
+use crate::ros2::Ros2Publisher;
 use gst::glib::WeakRef;
 use gstrswebrtc::signaller::Signallable;
 use reachy_api::bridge::{
@@ -41,6 +42,7 @@ pub struct GrpcClient {
     signaller: Option<WeakRef<Signallable>>,
     session_id: String,
     tx_stop: std::sync::mpsc::Sender<bool>,
+    ros2_publisher: Arc<Ros2Publisher>,
 }
 
 impl GrpcClient {
@@ -49,6 +51,7 @@ impl GrpcClient {
         signaller: Option<WeakRef<Signallable>>,
         session_id: Option<String>,
         tx_stop: Option<std::sync::mpsc::Sender<bool>>,
+        ros2_publisher: Arc<Ros2Publisher>,
     ) -> Result<Self, tonic::transport::Error> {
         debug!("Constructor Grpc client {address}");
 
@@ -87,6 +90,7 @@ impl GrpcClient {
             signaller,
             session_id: session_id.unwrap(),
             tx_stop: tx_stop.unwrap(),
+            ros2_publisher,
         })
     }
 
@@ -277,19 +281,27 @@ impl GrpcClient {
             self.rt
                 .block_on(self.arm_stub.send_arm_cartesian_goal(arm_cartesian_goal))?;
         } else if let Some(turn_on) = cmd.turn_on {
-            trace!("arm_turn_on");
-            self.rt.block_on(self.arm_stub.turn_on(turn_on))?;
+            // ROS2: publish torque enable
+            trace!("arm_turn_on via ROS2");
+            self.ros2_publisher.publish_torque(&turn_on.name, true);
         } else if let Some(turn_off) = cmd.turn_off {
-            trace!("arm_turn_off");
-            self.rt.block_on(self.arm_stub.turn_off(turn_off))?;
+            // ROS2: publish torque disable
+            trace!("arm_turn_off via ROS2");
+            self.ros2_publisher.publish_torque(&turn_off.name, false);
         } else if let Some(speed_limit) = cmd.speed_limit {
-            trace!("arm_speed_limit");
-            self.rt
-                .block_on(self.arm_stub.set_speed_limit(speed_limit))?;
+            // ROS2: publish speed limit
+            trace!("arm_speed_limit via ROS2");
+            if let Some(id) = speed_limit.id {
+                self.ros2_publisher
+                    .publish_speed_limit(&id.name, speed_limit.limit as f64);
+            }
         } else if let Some(torque_limit) = cmd.torque_limit {
-            trace!("arm_torque_limit");
-            self.rt
-                .block_on(self.arm_stub.set_torque_limit(torque_limit))?;
+            // ROS2: publish torque limit
+            trace!("arm_torque_limit via ROS2");
+            if let Some(id) = torque_limit.id {
+                self.ros2_publisher
+                    .publish_torque_limit(&id.name, torque_limit.limit as f64);
+            }
         } else {
             warn!("Unknown arm command: {:?}", cmd);
         }
@@ -303,11 +315,13 @@ impl GrpcClient {
             self.rt
                 .block_on(self.hand_stub.set_hand_position(hand_goal))?;
         } else if let Some(turn_on) = cmd.turn_on {
-            trace!("hand_turn_on");
-            self.rt.block_on(self.hand_stub.turn_on(turn_on))?;
+            // ROS2: publish torque enable
+            trace!("hand_turn_on via ROS2");
+            self.ros2_publisher.publish_torque(&turn_on.name, true);
         } else if let Some(turn_off) = cmd.turn_off {
-            trace!("hand_turn_off");
-            self.rt.block_on(self.hand_stub.turn_off(turn_off))?;
+            // ROS2: publish torque disable
+            trace!("hand_turn_off via ROS2");
+            self.ros2_publisher.publish_torque(&turn_off.name, false);
         } else {
             warn!("Unknown hand command: {:?}", cmd);
         }
@@ -321,22 +335,34 @@ impl GrpcClient {
             trace!("neck_goal");
             self.rt
                 .block_on(self.head_stub.send_neck_joint_goal(neck_goal))?;
-        } else if let Some(turn_on) = cmd.turn_on {
-            trace!("neck_turn_on");
-            self.rt.block_on(self.head_stub.turn_on(turn_on))?;
-            self.set_compliancy_antennas(false)?;
-        } else if let Some(turn_off) = cmd.turn_off {
-            trace!("neck_turn_off");
-            self.rt.block_on(self.head_stub.turn_off(turn_off))?;
-            self.set_compliancy_antennas(true)?;
+        } else if let Some(_turn_on) = cmd.turn_on {
+            // ROS2: publish torque enable for neck and antennas
+            trace!("neck_turn_on via ROS2");
+            self.ros2_publisher.publish_torque("neck", true);
+            // Antennas also turn on with neck (non-compliant)
+            self.ros2_publisher.publish_torque("antenna_left", true);
+            self.ros2_publisher.publish_torque("antenna_right", true);
+        } else if let Some(_turn_off) = cmd.turn_off {
+            // ROS2: publish torque disable for neck and antennas
+            trace!("neck_turn_off via ROS2");
+            self.ros2_publisher.publish_torque("neck", false);
+            // Antennas also turn off with neck (compliant)
+            self.ros2_publisher.publish_torque("antenna_left", false);
+            self.ros2_publisher.publish_torque("antenna_right", false);
         } else if let Some(speed_limit) = cmd.speed_limit {
-            trace!("neck_speed_limit");
-            self.rt
-                .block_on(self.head_stub.set_speed_limit(speed_limit))?;
+            // ROS2: publish speed limit
+            trace!("neck_speed_limit via ROS2");
+            if let Some(id) = speed_limit.id {
+                self.ros2_publisher
+                    .publish_speed_limit(&id.name, speed_limit.limit as f64);
+            }
         } else if let Some(torque_limit) = cmd.torque_limit {
-            trace!("neck_torque_limit");
-            self.rt
-                .block_on(self.head_stub.set_torque_limit(torque_limit))?;
+            // ROS2: publish torque limit
+            trace!("neck_torque_limit via ROS2");
+            if let Some(id) = torque_limit.id {
+                self.ros2_publisher
+                    .publish_torque_limit(&id.name, torque_limit.limit as f64);
+            }
         } else {
             warn!("Unknown neck command: {:?}", cmd);
         }
@@ -370,20 +396,23 @@ impl GrpcClient {
     }
 }
 
-#[test]
-fn test_get_reachy() {
-    env_logger::init();
-
-    let grpc_address = format!("http://localhost:50051");
-
-    let mut grpc_client = GrpcClient::new(grpc_address, None, None, None).unwrap();
-
-    let reachy: Reachy = grpc_client.get_reachy();
-    let reachy_id = reachy.id.unwrap();
-
-    assert!(
-        !reachy_id.name.is_empty(),
-        "Reachy name should not be empty"
-    );
-    assert!(reachy_id.id > 0, "Reachy id should be greater than 0");
-}
+// Test disabled: requires ROS2 environment for Ros2Publisher
+// #[test]
+// fn test_get_reachy() {
+//     env_logger::init();
+//
+//     let grpc_address = format!("http://localhost:50051");
+//
+//     // Would need: let ros2_context = rclrs::Context::new(...);
+//     // let ros2_publisher = Arc::new(Ros2Publisher::new(&ros2_context).unwrap());
+//     let mut grpc_client = GrpcClient::new(grpc_address, None, None, None, ros2_publisher).unwrap();
+//
+//     let reachy: Reachy = grpc_client.get_reachy();
+//     let reachy_id = reachy.id.unwrap();
+//
+//     assert!(
+//         !reachy_id.name.is_empty(),
+//         "Reachy name should not be empty"
+//     );
+//     assert!(reachy_id.id > 0, "Reachy id should be greater than 0");
+// }
