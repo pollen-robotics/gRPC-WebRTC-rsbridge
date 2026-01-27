@@ -16,6 +16,7 @@ const TORQUE_JOINTS: &[(&str, &[&str])] = &[
     ("r_arm", &["r_shoulder", "r_elbow", "r_wrist"]),
     ("l_arm", &["l_shoulder", "l_elbow", "l_wrist"]),
     ("neck", &["neck"]),
+    ("head", &["neck"]), // alias for neck
     ("r_hand", &["r_hand"]),
     ("l_hand", &["l_hand"]),
     ("antenna_left", &["antenna_left"]),
@@ -50,6 +51,10 @@ const LIMIT_JOINTS: &[(&str, &[&str])] = &[
     ),
     (
         "neck",
+        &["neck_raw_motor_1", "neck_raw_motor_2", "neck_raw_motor_3"],
+    ),
+    (
+        "head", // alias for neck
         &["neck_raw_motor_1", "neck_raw_motor_2", "neck_raw_motor_3"],
     ),
     ("r_hand", &["r_hand_raw_motor_1"]),
@@ -121,14 +126,18 @@ impl Ros2Publisher {
                         if let Some(joints) = torque_map.get(&part) {
                             let value = if enabled { 1.0 } else { 0.0 };
                             let msg = build_message(joints, "torque", value);
-                            debug!(
-                                "Publishing torque {} for part {} ({} joints)",
+                            info!(
+                                "Publishing torque {} for part {} - joints: {:?}",
                                 if enabled { "ON" } else { "OFF" },
                                 part,
-                                joints.len()
+                                joints
                             );
                             if let Err(e) = publisher.publish(&msg) {
                                 error!("Failed to publish torque command: {:?}", e);
+                            }
+                            // Arms need extra time for the subscriber to process
+                            if part == "l_arm" || part == "r_arm" {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
                             }
                         } else {
                             warn!("Unknown part for torque: {}", part);
@@ -146,6 +155,10 @@ impl Ros2Publisher {
                             if let Err(e) = publisher.publish(&msg) {
                                 error!("Failed to publish torque_limit command: {:?}", e);
                             }
+                            // Arms need extra time for the subscriber to process
+                            if part == "l_arm" || part == "r_arm" {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                            }
                         } else {
                             warn!("Unknown part for torque_limit: {}", part);
                         }
@@ -162,10 +175,18 @@ impl Ros2Publisher {
                             if let Err(e) = publisher.publish(&msg) {
                                 error!("Failed to publish speed_limit command: {:?}", e);
                             }
+                            // Arms need extra time for the subscriber to process
+                            if part == "l_arm" || part == "r_arm" {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                            }
                         } else {
                             warn!("Unknown part for speed_limit: {}", part);
                         }
                     }
+                }
+                // Spin to ensure message delivery - longer delay for reliable QoS handshake
+                for _ in 0..3 {
+                    let _ = node.spin_once(std::time::Duration::from_millis(10));
                 }
             }
 
